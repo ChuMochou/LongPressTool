@@ -35,13 +35,16 @@ import com.example.longpresstool.R
 import com.example.longpresstool.model.LongPressPhase
 import com.example.longpresstool.model.LongPressStateHolder
 import com.example.longpresstool.model.SidebarPosition
+import com.example.longpresstool.permission.AccessibilityPermission
 import com.example.longpresstool.permission.AppPreferences
 import com.example.longpresstool.permission.OverlayPermission
+import com.example.longpresstool.service.LongPressAccessibilityService
 import com.example.longpresstool.ui.widget.TouchIndicatorView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -295,6 +298,20 @@ class FloatingWindowService : Service() {
         }
 
         startButton?.setOnClickListener {
+            val state = LongPressStateHolder.state.value
+
+            // 启动前把三个前提条件查一遍，缺什么就明确告诉用户缺什么（需求第七节）。
+            if (!state.hasSelectedPosition) {
+                Toast.makeText(this, R.string.error_no_position_selected, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (!AccessibilityPermission.isEnabled(this)) {
+                // 用户在系统设置里把无障碍关掉了：给出提示并引导回去开启。
+                Toast.makeText(this, R.string.error_accessibility_disabled, Toast.LENGTH_LONG).show()
+                AccessibilityPermission.openSettings(this)
+                return@setOnClickListener
+            }
+
             // Phase 5 会在这里通过无障碍服务派发真实的长按手势。
             Toast.makeText(this, "长按执行将在 Phase 5 实现", Toast.LENGTH_SHORT).show()
         }
@@ -531,9 +548,17 @@ class FloatingWindowService : Service() {
     /**
      * 订阅全局状态。任何地方改了状态，两个悬浮窗立刻跟着变，
      * 不需要谁去手动同步，也就不可能出现"显示的状态和真实状态不一致"。
+     *
+     * 同时每秒主动查一次无障碍服务的开启状态。
+     * 为什么必须主动查（需求第十三节"用户关闭 AccessibilityService"）：
+     * 用户在系统设置里关掉无障碍服务时，系统**不会**通知悬浮窗，
+     * 无障碍服务自己的 onUnbind 在进程已被回收的情况下也不会执行。
+     * 所以只能由这边定时问系统，才能及时把「启动」按钮置灰并给出提示。
+     * 每秒一次只是读系统里一个列表，开销可以忽略。
      */
     private fun observeState() {
         var indicatorVisible = false
+        var lastAccessibilityEnabled = LongPressStateHolder.state.value.isAccessibilityEnabled
 
         serviceScope.launch {
             LongPressStateHolder.state.collectLatest { state ->
@@ -550,6 +575,21 @@ class FloatingWindowService : Service() {
                 indicatorVisible = shouldShow
 
                 indicatorView?.setPressing(state.isPressing)
+            }
+        }
+
+        serviceScope.launch {
+            while (true) {
+                val enabled = AccessibilityPermission.isEnabled(this@FloatingWindowService)
+                if (enabled != lastAccessibilityEnabled) {
+                    lastAccessibilityEnabled = enabled
+                    // 只在变化时写状态，避免每秒触发一次无意义的重组。
+                    LongPressStateHolder.setAccessibilityState(
+                        enabled = enabled,
+                        connected = LongPressAccessibilityService.isConnected()
+                    )
+                }
+                delay(ACCESSIBILITY_POLL_INTERVAL_MS)
             }
         }
     }
@@ -581,11 +621,13 @@ class FloatingWindowService : Service() {
             ColorStateList.valueOf(ContextCompat.getColor(this, dotColorRes))
 
         // ---- 提示文字 ----
-        hintTextView?.text = when (phase) {
-            LongPressPhase.PRESSING -> getString(R.string.overlay_hint_pressing)
-            LongPressPhase.SELECTING_POSITION -> getString(R.string.overlay_hint_selecting)
-            LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_hint_ready)
-            LongPressPhase.NO_POSITION -> getString(R.string.overlay_hint_choose_position)
+        // 无障碍服务被关掉时，优先提示这件事：此时其他提示都没意义（启动不了）。
+        hintTextView?.text = when {
+            !state.isAccessibilityEnabled -> getString(R.string.overlay_hint_accessibility_off)
+            phase == LongPressPhase.PRESSING -> getString(R.string.overlay_hint_pressing)
+            phase == LongPressPhase.SELECTING_POSITION -> getString(R.string.overlay_hint_selecting)
+            phase == LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_hint_ready)
+            else -> getString(R.string.overlay_hint_choose_position)
         }
 
         // 只在长按时显示"60 秒分段"的限制说明，平时不打扰用户。
@@ -598,7 +640,9 @@ class FloatingWindowService : Service() {
 
         // 长按过程中不允许改位置，避免指示器和实际按下的点不一致。
         selectPositionButton?.isEnabled = phase != LongPressPhase.PRESSING
-        startButton?.isEnabled = state.hasSelectedPosition && phase != LongPressPhase.PRESSING
+        // 启动需要三个条件同时成立，判断逻辑集中在 LongPressUiState.canStartLongPress，
+        // 避免这里和首页各写一套导致不一致。
+        startButton?.isEnabled = state.canStartLongPress
         stopButton?.isEnabled = phase == LongPressPhase.PRESSING
     }
 
@@ -767,6 +811,9 @@ class FloatingWindowService : Service() {
 
         /** 指示器窗口总高度 = 圆形 60dp + 下方坐标文字 36dp。 */
         private const val INDICATOR_WINDOW_HEIGHT_DP = 96
+
+        /** 检查无障碍服务是否仍开启的间隔（毫秒）。 */
+        private const val ACCESSIBILITY_POLL_INTERVAL_MS = 1_000L
 
         /**
          * Service 是否正在运行。

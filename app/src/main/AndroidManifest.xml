@@ -73,6 +73,47 @@
                 android:value="悬浮控制面板：让用户在其他应用之上选择长按位置并触发长按手势" />
         </service>
 
+        <!--
+          执行长按手势的无障碍服务。
+
+          这是整个项目最关键的声明，逐条解释：
+
+          - android:permission="@android:permission/BIND_ACCESSIBILITY_SERVICE"：
+            只有系统能绑定这个服务，其他应用不能。**必须**写，否则服务不会出现在
+            系统设置的无障碍列表里（或者能被别的应用直接拉起，属于安全漏洞）。
+
+          - android:exported="true"：必须为 true。因为绑定它的是**系统**（外部进程），
+            不导出的话系统绑不上。安全性由上一条的 permission 保证。
+
+          - <intent-filter> + ACCESSIBILITY_SERVICE action：
+            这是无障碍服务被系统识别并显示在设置列表里的标志，缺一不可。
+
+          - android:label：显示在系统无障碍设置页里的服务名。用户得靠它找到我们，
+            所以用"长按器"这个名字，和 App 名一致，方便用户对应。
+
+          - android:description / android:summary：分别指向 strings.xml 里的说明文字，
+            向用户解释这个服务做什么。描述不清用户不敢开。配置细节（例如
+            canPerformGestures）在 res/xml/accessibility_service_config.xml 里。
+
+          - android:exported 与 meta-data 里的配置共同决定能力：
+            我们只申请"派发手势"，**不**申请"读取窗口内容"。
+        -->
+        <service
+            android:name=".service.LongPressAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:description="@string/accessibility_service_description"
+            android:summary="@string/accessibility_service_summary"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
     </application>
 
 </manifest>

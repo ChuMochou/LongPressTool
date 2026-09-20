@@ -16,6 +16,19 @@
     <string name="action_open_overlay_settings">去开启权限</string>
     <string name="action_retry_check">我已开启，重新检查</string>
 
+    <!-- 权限清单（首页） -->
+    <string name="permission_checklist_title">运行前需要开启以下权限</string>
+    <string name="permission_retry_hint">如果已经开启，请点击下方按钮重新检查。</string>
+
+    <!-- 无障碍服务引导（首页） -->
+    <string name="accessibility_permission_title">还需要开启「无障碍服务」</string>
+    <string name="accessibility_permission_reason">Android 不允许普通应用向其他应用注入触摸事件，唯一的官方途径是通过无障碍服务。请在下一个页面找到「长按器」并打开开关，然后返回本应用。本应用只用它来执行长按手势，不会读取任何界面内容。</string>
+    <string name="action_open_accessibility_settings">去开启无障碍服务</string>
+
+    <!-- 无障碍服务在系统设置里显示的名字与说明 -->
+    <string name="accessibility_service_summary">在其他应用上执行长按手势</string>
+    <string name="accessibility_service_description">用于「长按器」在你自己选定的屏幕位置执行长按手势。本服务不会读取或记录任何界面内容。</string>
+
     <!-- ===== 悬浮侧边栏 ===== -->
     <string name="overlay_sidebar_title">长按器</string>
     <string name="overlay_close">关闭</string>
@@ -35,6 +48,11 @@
     <string name="overlay_hint_ready">位置已确定。点击「启动」执行长按。</string>
     <string name="overlay_hint_pressing">正在按住该位置。点击「停止」即可结束长按。</string>
     <string name="overlay_hint_max_duration">注意：Android 系统限制单次手势最长 60 秒，本应用会自动分段续接以持续按住。</string>
+    <string name="overlay_hint_accessibility_off">无障碍服务已被关闭，无法执行长按。请在系统设置的「无障碍」中重新开启「长按器」。</string>
+
+    <!-- 操作被拒绝时的提示（需求第七节：缺什么就明确提示什么） -->
+    <string name="error_no_position_selected">请先点击「选择位置」选定要长按的位置</string>
+    <string name="error_accessibility_disabled">无障碍服务未开启，无法执行长按，正在打开系统设置</string>
 
     <!-- 圆形指示器下方显示的实时坐标 -->
     <string name="indicator_coords">%1$d, %2$d</string>

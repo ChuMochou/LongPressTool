@@ -21,6 +21,12 @@ data class LongPressUiState(
     /** 悬浮窗权限是否已经授予（由 Activity 每次回到前台时刷新）。 */
     val overlayPermissionGranted: Boolean = false,
 
+    /** 无障碍服务是否已在系统设置里开启（决定能不能派发手势）。 */
+    val isAccessibilityEnabled: Boolean = false,
+
+    /** 无障碍服务对象是否真的已经连上（可以立刻派发手势）。 */
+    val isAccessibilityConnected: Boolean = false,
+
     /** 悬浮侧边栏 Service 是否正在运行。 */
     val isServiceRunning: Boolean = false,
 
@@ -40,13 +46,13 @@ data class LongPressUiState(
     val isPressing: Boolean = false
 ) {
     /**
-     * 便捷派生属性：什么时候才允许点「启动」。
-     * 放在这里而不是散落在界面里，避免两处判断不一致。
+     * 派生属性：什么时候才允许点「启动」。
      *
-     * 注意：Phase 5 还会加上"无障碍服务是否已开启"这一条。
+     * 三个条件缺一不可：选过位置、没在长按、无障碍服务可用。
+     * 集中放在这里而不是散落在界面里，避免多处判断不一致。
      */
     val canStartLongPress: Boolean
-        get() = hasSelectedPosition && !isPressing
+        get() = hasSelectedPosition && !isPressing && isAccessibilityEnabled
 }
 
 /**
@@ -81,6 +87,18 @@ object LongPressStateHolder {
 
     fun setOverlayPermissionGranted(granted: Boolean) =
         _state.update { it.copy(overlayPermissionGranted = granted) }
+
+    /**
+     * 更新无障碍服务的状态。
+     *
+     * @param enabled   系统设置里是否已开启
+     * @param connected 服务对象是否已经连上
+     */
+    fun setAccessibilityState(enabled: Boolean, connected: Boolean) =
+        _state.update { it.copy(isAccessibilityEnabled = enabled, isAccessibilityConnected = connected) }
+
+    fun setAccessibilityConnected(connected: Boolean) =
+        _state.update { it.copy(isAccessibilityConnected = connected) }
 
     fun setServiceRunning(running: Boolean) =
         _state.update { it.copy(isServiceRunning = running) }

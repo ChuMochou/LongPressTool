@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  无障碍服务的配置，由 android:description / meta-data 里引用。
+
+  逐项说明（这些都是"不写就不工作"的关键配置）：
+
+  - eventTypes="typeAllMask"：本服务不关心任何界面事件，它只用来**派发手势**。
+    但 eventTypes 是必填项，所以给一个最宽的值。
+
+  - canPerformGestures="true"：**最关键的一项**。
+    没有它，dispatchGesture() 不会有任何效果（返回 false，而且不报错、不崩溃），
+    是初学者最容易被卡住的地方。
+
+  - canRetrieveWindowContent="false"：本应用**故意**不要这个能力。
+    它允许读取其他应用的界面内容（属于敏感能力），而"长按某个坐标"完全不需要它。
+    少要一个权限，用户和审核都更放心。
+
+  - notificationTimeout：向系统注册事件回调的超时时间（毫秒）。我们几乎不用事件回调，
+    给一个常见的 100 即可。
+
+  - description：会显示在系统"无障碍"设置页里，向用户解释这个服务做什么。
+    必须写清楚，否则用户不敢开。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/accessibility_service_description"
+    android:summary="@string/accessibility_service_summary"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="false"
+    android:notificationTimeout="100" />

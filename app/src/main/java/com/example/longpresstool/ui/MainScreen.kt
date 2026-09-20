@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -67,7 +69,8 @@ fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)   // 避开状态栏和导航栏
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .verticalScroll(rememberScrollState())   // 屏幕小 + 两张权限卡片时能滚动
+                .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -81,7 +84,7 @@ fun MainScreen(
                 enabled = !uiState.isServiceRunning,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 32.dp)
+                    .padding(top = 28.dp)
             ) {
                 Text(
                     text = stringResource(R.string.action_toggle_long_press_mode),
@@ -93,19 +96,47 @@ fun MainScreen(
             if (uiState.isServiceRunning) {
                 TextButton(
                     onClick = { viewModel.stopLongPressMode() },
-                    modifier = Modifier.padding(top = 8.dp)
+                    modifier = Modifier.padding(top = 4.dp)
                 ) {
                     Text(text = stringResource(R.string.overlay_close))
                 }
             }
 
-            // 缺权限时才显示引导卡片；点了按钮但没授权，这里就会一直挂着，
-            // 用户从系统设置返回后 MainActivity.onResume 会重新检查，通过后它自动消失。
-            if (!uiState.overlayPermissionGranted && !uiState.isServiceRunning) {
-                OverlayPermissionSection(
-                    onOpenSettings = { viewModel.openOverlaySettings() },
-                    onRetry = { viewModel.refreshPermission() },
-                    modifier = Modifier.padding(top = 24.dp)
+            // ---- 权限清单：缺哪个就显示哪个 ----
+            // 这两项都是"特殊权限"，只能跳系统设置手动开，所以每一项都带说明 + 跳转按钮 + 重新检查。
+            // 用户从设置返回时 onResume 会重新检查，通过后对应卡片会自动消失。
+            if (!uiState.overlayPermissionGranted || !uiState.isAccessibilityEnabled) {
+                Text(
+                    text = stringResource(R.string.permission_checklist_title),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 28.dp, bottom = 4.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (!uiState.overlayPermissionGranted) {
+                PermissionCard(
+                    title = stringResource(R.string.overlay_permission_title),
+                    reason = stringResource(R.string.overlay_permission_reason),
+                    actionLabel = stringResource(R.string.action_open_overlay_settings),
+                    onAction = { viewModel.openOverlaySettings() },
+                    retryLabel = stringResource(R.string.action_retry_check),
+                    onRetry = { viewModel.refreshPermissions() },
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+
+            if (!uiState.isAccessibilityEnabled) {
+                PermissionCard(
+                    title = stringResource(R.string.accessibility_permission_title),
+                    reason = stringResource(R.string.accessibility_permission_reason),
+                    actionLabel = stringResource(R.string.action_open_accessibility_settings),
+                    onAction = { viewModel.openAccessibilitySettings() },
+                    retryLabel = stringResource(R.string.action_retry_check),
+                    onRetry = { viewModel.refreshPermissions() },
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
         }
@@ -164,15 +195,19 @@ private fun StatusCard(
 }
 
 /**
- * 悬浮窗权限引导卡片。
+ * 通用权限引导卡片。
  *
- * 这是需求第十节要求的流程中"界面"的那一半：
- *   检查 -> 没有 -> 显示说明 -> 跳系统设置 -> 用户授权 -> 返回 App -> 重新检查
+ * 悬浮窗权限和无障碍服务的引导流程完全一样，所以抽成一个组件：
+ *   检查 -> 没有 -> 显示说明 -> 跳系统设置 -> 用户操作 -> 返回 App -> 重新检查
  * 最后一步"返回后重新检查"由 MainActivity 在 onResume 里触发，不在这里。
  */
 @Composable
-private fun OverlayPermissionSection(
-    onOpenSettings: () -> Unit,
+private fun PermissionCard(
+    title: String,
+    reason: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+    retryLabel: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -188,29 +223,29 @@ private fun OverlayPermissionSection(
                 .padding(16.dp)
         ) {
             Text(
-                text = stringResource(R.string.overlay_permission_title),
+                text = title,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer
             )
 
             Text(
-                text = stringResource(R.string.overlay_permission_reason),
+                text = reason,
                 modifier = Modifier.padding(top = 8.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer
             )
 
             OutlinedButton(
-                onClick = onOpenSettings,
+                onClick = onAction,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp)
             ) {
-                Text(text = stringResource(R.string.action_open_overlay_settings))
+                Text(text = actionLabel)
             }
 
             Text(
-                text = stringResource(R.string.overlay_permission_hint_not_granted),
+                text = stringResource(R.string.permission_retry_hint),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
@@ -224,7 +259,7 @@ private fun OverlayPermissionSection(
                 onClick = onRetry,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             ) {
-                Text(text = stringResource(R.string.action_retry_check))
+                Text(text = retryLabel)
             }
         }
     }

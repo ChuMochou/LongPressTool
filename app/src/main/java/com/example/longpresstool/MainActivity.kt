@@ -67,7 +67,7 @@ class MainActivity : ComponentActivity() {
      */
     override fun onResume() {
         super.onResume()
-        viewModel.refreshPermission()
+        viewModel.refreshPermissions()
     }
 
     private fun askNotificationPermissionIfNeeded() {
