@@ -32,6 +32,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.OnApplyWindowInsetsListener
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.example.longpresstool.BuildConfig
 import com.example.longpresstool.MainActivity
 import com.example.longpresstool.R
 import com.example.longpresstool.model.LongPressPhase
@@ -126,6 +127,17 @@ class FloatingWindowService : Service() {
     private var indicatorDragStartParamY = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * 服务被再次 start 时（例如调试命令、或用户重复点启动）会走到这里。
+     * 正常情况下什么都不用做：侧边栏已经在 onCreate 里显示好了。
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        handleDebugCommand(intent)
+        // NOT_STICKY：侧边栏是我们的界面，被系统杀掉后自动重启一个"没有界面需求"的
+        // Service 没有意义，反而可能让用户看到孤立的通知。需要时由用户重新点启动。
+        return START_NOT_STICKY
+    }
 
     /**
      * 专门用来加载悬浮窗布局的 Context。
@@ -270,7 +282,7 @@ class FloatingWindowService : Service() {
 
     // ==================== 侧边栏 ====================
 
-    private fun showSidebar() {
+    private fun showSidebar(intent: Intent? = null) {
         if (sidebarView != null) return   // 已经显示，避免重复添加窗口
 
         if (!OverlayPermission.isGranted(this)) {
@@ -316,6 +328,28 @@ class FloatingWindowService : Service() {
         observeInsetsChanges(view)
         clampSidebarIntoScreen(params)
         safeUpdateLayout(view, params)
+    }
+
+    /**
+     * 【仅 debug 构建】用 adb 直接触发一次长按，便于在真机/模拟器上排查长按问题：
+     *
+     *   adb shell am start-foreground-service \
+     *     -n <包名>/.service.FloatingWindowService \
+     *     --ei debug_x 540 --ei debug_y 1200
+     *
+     * 注意：这个服务是 exported=false，所以这条 adb 命令**只能由 shell/root 执行**，
+     * 普通应用无法调用；而且只在 BuildConfig.DEBUG 时生效，
+     * 正式发布（release）构建里这段逻辑不会被执行。
+     */
+    private fun handleDebugCommand(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
+        val x = intent?.getIntExtra(EXTRA_DEBUG_X, -1) ?: -1
+        val y = intent?.getIntExtra(EXTRA_DEBUG_Y, -1) ?: -1
+        if (x < 0 || y < 0) return
+
+        Log.d(TAG, "debug: 在 ($x, $y) 触发长按")
+        LongPressStateHolder.setTargetPosition(x, y)
+        startLongPress(x, y)
     }
 
     private fun bindSidebarViews(root: View) {
@@ -953,6 +987,10 @@ class FloatingWindowService : Service() {
 
         /** 检查无障碍服务是否仍开启的间隔（毫秒）。 */
         private const val ACCESSIBILITY_POLL_INTERVAL_MS = 1_000L
+
+        /** 【仅 debug】用 adb 触发一次长按的坐标参数。 */
+        const val EXTRA_DEBUG_X = "debug_x"
+        const val EXTRA_DEBUG_Y = "debug_y"
 
         /**
          * Service 是否正在运行。

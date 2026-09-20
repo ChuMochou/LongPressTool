@@ -32,6 +32,10 @@ android {
     }
     buildFeatures {
         compose = true
+        // 生成 BuildConfig，用来区分 debug / release。
+        // 本项目的 debug 构建里有一个"用 adb 直接触发长按"的排查入口，
+        // 必须保证它不会进入正式包，所以需要 BuildConfig.DEBUG。
+        buildConfig = true
     }
 }
 

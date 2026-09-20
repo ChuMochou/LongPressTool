@@ -1,6 +1,7 @@
 package com.example.longpresstool
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -10,6 +11,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import com.example.longpresstool.model.LongPressStateHolder
+import com.example.longpresstool.service.LongPressAccessibilityService
 import com.example.longpresstool.ui.MainScreen
 import com.example.longpresstool.ui.MainViewModel
 import com.example.longpresstool.ui.theme.LongPressToolTheme
@@ -53,6 +56,30 @@ class MainActivity : ComponentActivity() {
         }
 
         askNotificationPermissionIfNeeded()
+
+        // 【仅 debug】处理"用 adb 直接触发一次长按"的排查入口。
+        // 这个 action 只在 src/debug/AndroidManifest.xml 里注册，
+        // 正式包里不存在，所以 release 构建不会被触发。
+        handleDebugHoldIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleDebugHoldIntent(intent)
+    }
+
+    private fun handleDebugHoldIntent(intent: Intent?) {
+        // 【仅 debug】排查入口：见文件末尾说明。
+        // 不需要在 Manifest 里注册任何 action：MainActivity 已经 exported=true，
+        // 而这条 intent **没有声明 action**，只有能用 adb 的 shell/root 能构造出来。
+        if (!BuildConfig.DEBUG) return
+        val x = intent?.getIntExtra(EXTRA_DEBUG_X, -1) ?: -1
+        val y = intent?.getIntExtra(EXTRA_DEBUG_Y, -1) ?: -1
+        android.util.Log.d("LongPressDebug", "handleDebugHoldIntent x=$x y=$y")
+        if (x < 0 || y < 0) return
+        LongPressStateHolder.setTargetPosition(x, y)
+        val result = LongPressAccessibilityService.startHold(x, y)
+        android.util.Log.d("LongPressDebug", "startHold($x,$y) result=$result")
     }
 
     /**
@@ -82,5 +109,20 @@ class MainActivity : ComponentActivity() {
         if (!granted) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    companion object {
+        /**
+         * 【仅 debug】排查用参数：在启动 Activity 时带上坐标，直接触发一次长按。
+         *
+         *   adb shell am start -n <包名>/.MainActivity \
+         *     --ei debug_x 540 --ei debug_y 1200
+         *
+         * 为什么要留这个入口：长按涉及"手势接力"，出问题时（例如只按一下就停）
+         * 必须能在真机/模拟器上快速复现并看日志，靠手点很难稳定复现。
+         * 它在 release 构建里不会执行（有 BuildConfig.DEBUG 判断）。
+         */
+        private const val EXTRA_DEBUG_X = "debug_x"
+        private const val EXTRA_DEBUG_Y = "debug_y"
     }
 }
