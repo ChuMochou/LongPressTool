@@ -1,0 +1,18 @@
+*.iml
+.gradle
+/local.properties
+
+# 本地构建用的 Gradle 缓存（沙箱/CI 场景下用 GRADLE_USER_HOME 指到这里）
+/.gradle/user-home/
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties

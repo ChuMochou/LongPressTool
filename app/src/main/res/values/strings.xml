@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 应用名：同时显示在桌面图标下方和首页标题上 -->
+    <string name="app_name">长按器</string>
+
+    <!-- 首页 -->
+    <string name="action_toggle_long_press_mode">启动长按器</string>
+    <string name="status_not_started">状态：未启动</string>
+    <string name="status_running">状态：长按器模式已开启</string>
+    <string name="phase1_hint">当前是 Phase 1：按钮只切换状态，悬浮窗与长按功能将在后续阶段接入。</string>
+</resources>
