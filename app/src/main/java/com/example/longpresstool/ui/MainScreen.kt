@@ -1,56 +1,59 @@
 package com.example.longpresstool.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.longpresstool.R
 import com.example.longpresstool.ui.theme.LongPressToolTheme
 
+/** 状态指示灯的颜色，和悬浮侧边栏保持同一套语义。 */
+private val ColorIdle = Color(0xFF9E9E9E)      // 灰：未启动
+private val ColorReady = Color(0xFF2E7D32)     // 绿：已启动
+private val ColorPressing = Color(0xFFD32F2F)  // 红：长按中
+
 /**
- * 首页（Phase 1）。
+ * 首页。
  *
- * 目前只做三件事：
- * 1. 显示标题「长按器」；
- * 2. 显示当前状态（未启动 / 已开启）；
- * 3. 提供一个「启动长按器」按钮负责切换状态。
- *
- * 这个按钮现在还没有任何真实能力：它只改一个布尔值。
- * 真正的悬浮窗会在 Phase 2 接进来（届时会把它换成启动 FloatingWindowService）。
- *
- * 关于状态写法：
- * 先用最简单的 rememberSaveable + mutableStateOf，让初学者一眼看懂「状态变了 UI 就重组」。
- * 等 Phase 2 有多个界面和 Service 需要共享状态时，再升级成 ViewModel + StateFlow。
+ * 职责只有"画界面"：状态全部来自 [MainViewModel]，动作也全部交给它。
+ * 这种写法叫单向数据流（UI 只读状态、只发事件），是 Compose 推荐的模式，
+ * 好处是界面永远不可能和真实运行状态脱节。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(modifier: Modifier = Modifier) {
-
-    // true = 已经进入长按器模式；false = 未启动。
-    // 用 rememberSaveable 而不是 remember：屏幕旋转 / 系统重建界面后状态不会丢。
-    // 注意它只在这一块界面内有效，还不能代表 Service 的真实运行状态，
-    // 所以 Phase 2 必须换成真实的状态来源，否则界面会和实际状态不一致。
-    var isLongPressModeOn by rememberSaveable { mutableStateOf(false) }
+fun MainScreen(
+    modifier: Modifier = Modifier,
+    viewModel: MainViewModel = viewModel()
+) {
+    // collectAsStateWithLifecycle：界面不可见时自动停止收集，比 collectAsState 更省电、更安全。
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -63,17 +66,19 @@ fun MainScreen(modifier: Modifier = Modifier) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)   // 让内容避开状态栏和导航栏
+                .padding(innerPadding)   // 避开状态栏和导航栏
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // ---- 状态区域 ----
-            StatusCard(isLongPressModeOn = isLongPressModeOn)
+            StatusCard(
+                isLongPressModeOn = uiState.isServiceRunning,
+                isPressing = uiState.isPressing
+            )
 
-            // ---- 主按钮 ----
             Button(
-                onClick = { isLongPressModeOn = !isLongPressModeOn },
+                onClick = { viewModel.startLongPressMode() },
+                enabled = !uiState.isServiceRunning,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 32.dp)
@@ -84,29 +89,50 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 )
             }
 
-            // 给初学者的一句提示，说明这一阶段还不是真的能用。
-            Text(
-                text = stringResource(R.string.phase1_hint),
-                modifier = Modifier.padding(top = 24.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
+            // 已经启动时，给一个从首页关闭的入口（平时应该用侧边栏里的「关闭」）。
+            if (uiState.isServiceRunning) {
+                TextButton(
+                    onClick = { viewModel.stopLongPressMode() },
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text(text = stringResource(R.string.overlay_close))
+                }
+            }
+
+            // 缺权限时才显示引导卡片；点了按钮但没授权，这里就会一直挂着，
+            // 用户从系统设置返回后 MainActivity.onResume 会重新检查，通过后它自动消失。
+            if (!uiState.overlayPermissionGranted && !uiState.isServiceRunning) {
+                OverlayPermissionSection(
+                    onOpenSettings = { viewModel.openOverlaySettings() },
+                    onRetry = { viewModel.refreshPermission() },
+                    modifier = Modifier.padding(top = 24.dp)
+                )
+            }
         }
     }
 }
 
 /**
- * 状态卡片：把「状态：未启动 / 已开启」单独抽出来，方便后面复用到悬浮侧边栏里。
+ * 状态卡片：显示当前状态，并带一个状态指示灯。
  */
 @Composable
 private fun StatusCard(
     isLongPressModeOn: Boolean,
+    isPressing: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val statusText = stringResource(
-        if (isLongPressModeOn) R.string.status_running else R.string.status_not_started
-    )
+    // 详细坐标之类的信息放在悬浮侧边栏显示，首页只表达"整体处于什么状态"。
+    val statusText = when {
+        isPressing -> stringResource(R.string.status_pressing)
+        isLongPressModeOn -> stringResource(R.string.status_running)
+        else -> stringResource(R.string.status_not_started)
+    }
+
+    val dotColor = when {
+        isPressing -> ColorPressing
+        isLongPressModeOn -> ColorReady
+        else -> ColorIdle
+    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -114,14 +140,22 @@ private fun StatusCard(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(color = dotColor, shape = CircleShape)
+            )
+
             Text(
                 text = statusText,
+                modifier = Modifier.padding(start = 10.dp),
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -129,12 +163,110 @@ private fun StatusCard(
     }
 }
 
+/**
+ * 悬浮窗权限引导卡片。
+ *
+ * 这是需求第十节要求的流程中"界面"的那一半：
+ *   检查 -> 没有 -> 显示说明 -> 跳系统设置 -> 用户授权 -> 返回 App -> 重新检查
+ * 最后一步"返回后重新检查"由 MainActivity 在 onResume 里触发，不在这里。
+ */
+@Composable
+private fun OverlayPermissionSection(
+    onOpenSettings: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.overlay_permission_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+
+            Text(
+                text = stringResource(R.string.overlay_permission_reason),
+                modifier = Modifier.padding(top = 8.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+
+            OutlinedButton(
+                onClick = onOpenSettings,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+            ) {
+                Text(text = stringResource(R.string.action_open_overlay_settings))
+            }
+
+            Text(
+                text = stringResource(R.string.overlay_permission_hint_not_granted),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                textAlign = TextAlign.Center
+            )
+
+            // 有些用户在设置页找不到开关就直接返回了，给一个手动重试入口。
+            TextButton(
+                onClick = onRetry,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            ) {
+                Text(text = stringResource(R.string.action_retry_check))
+            }
+        }
+    }
+}
+
 // ---- 预览：不装到手机 / 模拟器上也能在 Android Studio 里看到界面 ----
 
-@Preview(showBackground = true)
+@Preview(showBackground = true, name = "首页 - 未启动")
 @Composable
 private fun MainScreenPreview() {
     LongPressToolTheme {
-        MainScreen()
+        PreviewContent(isLongPressModeOn = false, isPressing = false)
+    }
+}
+
+@Preview(showBackground = true, name = "首页 - 已启动")
+@Composable
+private fun MainScreenRunningPreview() {
+    LongPressToolTheme {
+        PreviewContent(isLongPressModeOn = true, isPressing = false)
+    }
+}
+
+/** 预览用的简化版首页：绕过 ViewModel，只画状态卡片和主按钮。 */
+@Composable
+private fun PreviewContent(isLongPressModeOn: Boolean, isPressing: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        StatusCard(isLongPressModeOn = isLongPressModeOn, isPressing = isPressing)
+        Button(
+            onClick = {},
+            enabled = !isLongPressModeOn,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 32.dp)
+        ) {
+            Text(text = stringResource(R.string.action_toggle_long_press_mode))
+        }
     }
 }

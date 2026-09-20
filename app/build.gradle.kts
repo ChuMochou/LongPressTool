@@ -43,7 +43,13 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    // 悬浮窗里的传统 View 界面用到 MaterialCardView 等 Material Components 控件
+    implementation(libs.android.material)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // 让 Compose 能感知生命周期地收集 StateFlow（collectAsStateWithLifecycle）
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    // Compose 里的 viewModel() 需要它
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

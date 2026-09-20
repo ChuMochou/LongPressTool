@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  状态指示灯的底图：一个圆。
+  代码里通过 View.setBackgroundTintList() 改颜色来表示不同状态
+  （未选择 / 已选择 / 长按中），不用为每种状态各写一个 drawable。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#9E9E9E" />
+</shape>

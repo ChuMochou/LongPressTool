@@ -2,6 +2,32 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+      悬浮窗权限：显示在其他应用上层。
+
+      这是"特殊权限"，无法用运行时弹窗申请，用户必须去系统设置里手动打开开关。
+      引导流程见 permission/OverlayPermission.kt 和 MainActivity。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 前台 Service：Android 9 (API 28) 起必须声明这个普通权限。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!--
+      Android 14 (API 34) 起，前台 Service 必须声明"类型"，并申请与该类型对应的权限。
+      本应用的类型是 specialUse：它不是导航、播放、定位等任何标准类别，
+      只是"与其他应用交互的悬浮控制面板"，这正是 specialUse 的设计用途。
+      声明后仍要在代码里调用 startForeground(id, notification, type)，见 FloatingWindowService。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!--
+      Android 13 (API 33) 起，显示通知需要用户授权。前台 Service 的常驻通知也受影响。
+      不申请的话通知不会显示（Service 本身仍能升为前台，但用户看不到提示）。
+      运行时申请逻辑在 MainActivity 里。
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -11,10 +37,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.LongPressTool">
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.LongPressTool"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -23,6 +49,30 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          悬浮侧边栏的后台 Service。
+
+          几个属性的理由：
+          - exported="false"：只允许本应用启动，别让外部应用拉起它。
+          - foregroundServiceType="specialUse"：Android 14+ 的强制要求，
+            并且必须给一个 <property> 说明用途，否则部分应用商店/系统校验会不通过。
+          - stopWithTask="true"：用户从最近任务里划掉应用时，顺便关掉侧边栏，
+            避免"应用都没了，悬浮窗还挂在屏幕上"的困惑（见需求第十三节：异常情况）。
+          - configChanges：屏幕旋转/尺寸变化时不重建 Service，
+            侧边栏不会闪一下；具体处理见 FloatingWindowService.onConfigurationChanged()。
+        -->
+        <service
+            android:name=".service.FloatingWindowService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="悬浮控制面板：让用户在其他应用之上选择长按位置并触发长按手势" />
+        </service>
+
     </application>
 
 </manifest>

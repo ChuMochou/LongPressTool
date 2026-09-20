@@ -3,9 +3,40 @@
     <!-- 应用名：同时显示在桌面图标下方和首页标题上 -->
     <string name="app_name">长按器</string>
 
-    <!-- 首页 -->
+    <!-- ===== 首页 ===== -->
     <string name="action_toggle_long_press_mode">启动长按器</string>
     <string name="status_not_started">状态：未启动</string>
     <string name="status_running">状态：长按器模式已开启</string>
-    <string name="phase1_hint">当前是 Phase 1：按钮只切换状态，悬浮窗与长按功能将在后续阶段接入。</string>
+    <string name="status_pressing">状态：正在长按</string>
+
+    <!-- 首页：悬浮窗权限申请区域 -->
+    <string name="overlay_permission_title">还需要「显示在其他应用上层」权限</string>
+    <string name="overlay_permission_reason">长按器的控制侧边栏需要悬浮在桌面和其他应用之上，才能在你操作别的 App 时继续使用。请在下个页面打开「允许显示在其他应用上层」开关，然后返回本应用。</string>
+    <string name="overlay_permission_hint_not_granted">仍未获得权限，请点击上方按钮重新去系统设置里开启。</string>
+    <string name="action_open_overlay_settings">去开启权限</string>
+    <string name="action_retry_check">我已开启，重新检查</string>
+
+    <!-- ===== 悬浮侧边栏 ===== -->
+    <string name="overlay_sidebar_title">长按器</string>
+    <string name="overlay_close">关闭</string>
+
+    <string name="action_select_position">选择位置</string>
+    <string name="action_finish_selecting">完成选择</string>
+    <string name="action_start_long_press">启动</string>
+    <string name="action_stop_long_press">停止</string>
+
+    <string name="overlay_status_not_selected">未选择位置</string>
+    <string name="overlay_status_selected">已选择位置（%1$d, %2$d）</string>
+    <string name="overlay_status_pressing">长按中（%1$d, %2$d）</string>
+
+    <string name="overlay_hint_choose_position">请点击「选择位置」，把圆形指示器拖到需要长按的地方。</string>
+    <string name="overlay_hint_ready">位置已确定。点击「启动」执行长按。</string>
+    <string name="overlay_hint_pressing">正在按住该位置。点击「停止」即可结束长按。</string>
+    <string name="overlay_hint_max_duration">注意：Android 系统限制单次手势最长 60 秒，本应用会自动分段续接以持续按住。</string>
+
+    <!-- ===== 通知（前台 Service 必需） ===== -->
+    <string name="notification_channel_name">长按器运行状态</string>
+    <string name="notification_channel_description">显示长按器侧边栏正在运行</string>
+    <string name="notification_title">长按器已启动</string>
+    <string name="notification_text">控制侧边栏正在其他应用上层显示</string>
 </resources>

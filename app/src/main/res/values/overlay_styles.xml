@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      悬浮侧边栏里的按钮统一样式。
+      继承 Widget.Material3.Button（实心按钮），只调整尺寸：
+      悬浮窗面积越小越好，所以按钮用 wrap_content + 稍小的内边距。
+    -->
+    <style name="LongPressOverlayButton" parent="Widget.Material3.Button">
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <!--
+      次要按钮（关闭、完成选择）。
+      继承 Button 而不是 TextButton，是为了让它在 theme 里也能被 Material3 着色，
+      这里只把背景改成透明、文字改成主色，视觉上就是"次要操作"。
+    -->
+    <style name="LongPressOverlayButton.Secondary">
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
+    </style>
+
+</resources>

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <!--
+      悬浮侧边栏状态指示灯的颜色。三种状态用三种颜色，让用户一眼分辨：
+      灰 = 还没选位置，绿 = 位置已就绪，红 = 正在长按。
+    -->
+    <color name="status_idle">#FF9E9E9E</color>
+    <color name="status_ready">#FF2E7D32</color>
+    <color name="status_pressing">#FFD32F2F</color>
 </resources>

@@ -1,5 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.LongPressTool" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      App 的窗口主题。
+
+      为什么必须用 Material Components 的父主题（Theme.Material3.*），
+      而不是模板默认的 android:Theme.Material.Light.NoActionBar：
+
+      1. Compose 自己画界面，其实不太依赖这个主题；
+      2. 但**悬浮窗**里用的是传统 View（MaterialCardView、Button），
+         它们必须在 Material Components 主题下才能正确解析
+         Widget.Material3.* 样式和 colorPrimary 之类的属性。
+         用非 Material 主题时，资源链接阶段就会报
+         "resource style/Widget.Material3.Button not found"。
+
+      选 DayNight：跟随系统的深色 / 浅色模式。
+    -->
+    <style name="Theme.LongPressTool" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 悬浮窗里用到的窗口背景色，交给 Material3 主题提供即可 -->
+        <item name="android:windowBackground">?attr/colorSurface</item>
+    </style>
 </resources>
