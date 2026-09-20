@@ -56,6 +56,7 @@
     <string name="error_accessibility_not_connected">无障碍服务尚未就绪，请稍后重试</string>
     <string name="error_unsupported_android_version">当前系统版本过低（低于 Android 8.0），无法持续长按。系统限制单次手势最长 60 秒。</string>
     <string name="error_already_pressing">已经在长按中了</string>
+    <string name="error_sidebar_covers_target">侧边栏挡住了长按位置，长按事件会被侧边栏接收，请把它拖开</string>
 
     <!-- 开始长按时的轻提示 -->
     <string name="overlay_status_pressing_short">已开始长按</string>

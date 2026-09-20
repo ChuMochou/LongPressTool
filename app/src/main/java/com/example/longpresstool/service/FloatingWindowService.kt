@@ -412,10 +412,16 @@ class FloatingWindowService : Service() {
      * dispatchGesture 注入的触摸，会交给**该坐标上最上层的可触摸窗口**。
      * 指示器圆形默认就压在目标点上，如果它还能接收触摸，
      * 那么这次"长按"会被我们自己的悬浮窗吃掉，被长按的那个 App 根本收不到事件。
-     * 所以长按期间指示器必须"看得见但摸不着"。
+     * 所以长按期间**指示器**必须"看得见但摸不着"。
+     *
+     * 注意：**侧边栏不能一起设为不可触摸**。
+     * 侧边栏上有「停止」按钮，如果它也不能接收触摸，用户按了长按就再也停不下来了。
+     * （这个错误我犯过一次，现象就是"开启长按后点不动停止"。）
+     * 侧边栏本身可以拖动，用户如果发现它挡住了长按目标，把它拖开即可。
      */
     private fun startLongPress(x: Int, y: Int) {
-        setOverlaysTouchable(false)
+        setIndicatorTouchable(false)
+        warnIfSidebarCoversTarget(x, y)
 
         val result = LongPressAccessibilityService.startHold(x, y)
 
@@ -425,8 +431,8 @@ class FloatingWindowService : Service() {
             return
         }
 
-        // 启动失败：把触摸能力还回去，否则用户连指示器都拖不动了。
-        setOverlaysTouchable(true)
+        // 启动失败：把指示器的触摸能力还回去，否则用户连它都拖不动了。
+        setIndicatorTouchable(true)
 
         val messageRes = when (result) {
             HoldStartResult.ServiceNotConnected -> R.string.error_accessibility_not_connected
@@ -436,23 +442,46 @@ class FloatingWindowService : Service() {
         Toast.makeText(this, messageRes, Toast.LENGTH_LONG).show()
     }
 
-    /** 停止长按。手势会在 1 秒内自然抬起（无法取消已派发的手势，见派发器的说明）。 */
+    /** 停止长按，让手指抬起。 */
     private fun stopLongPress() {
         LongPressAccessibilityService.stopHold()
-        // 立刻把触摸能力还回去，用户马上又能拖动指示器。
-        setOverlaysTouchable(true)
+        // 立刻把指示器的触摸能力还回去，用户马上又能拖动它。
+        setIndicatorTouchable(true)
     }
 
     /**
-     * 控制两个悬浮窗是否接收触摸。
+     * 如果侧边栏正好压在长按目标上，给用户一个提醒。
+     *
+     * 为什么需要这个提醒：侧边栏必须保持可点击（否则按不了「停止」），
+     * 代价是——万一它就压在目标坐标上，注入的触摸会被侧边栏吃掉，被长按的应用收不到事件。
+     * 这种情况没法自动解决（总不能让侧边栏消失），但可以让用户知道"把它拖开就好了"。
+     */
+    private fun warnIfSidebarCoversTarget(x: Int, y: Int) {
+        val view = sidebarView ?: return
+        val params = sidebarParams ?: return
+        val width = view.width.takeIf { it > 0 } ?: view.measuredWidth
+        val height = view.height.takeIf { it > 0 } ?: view.measuredHeight
+        if (width <= 0 || height <= 0) return
+
+        val covers = x >= params.x && x <= params.x + width &&
+            y >= params.y && y <= params.y + height
+
+        if (covers) {
+            Toast.makeText(this, R.string.error_sidebar_covers_target, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * 控制**指示器窗口**是否接收触摸。
      *
      * @param touchable false = 加 FLAG_NOT_TOUCHABLE，窗口变成"看得见但摸不着"，
-     *                  触摸穿过它交给下层的其他应用。长按期间必须是 false。
+     *                  注入的触摸会穿过它交给下层应用。长按期间必须是 false。
+     *                  true  = 恢复可触摸，用户才能拖动指示器。
      *
-     * 注意：仅仅改 params.flags 是不够的，必须调用 updateViewLayout() 才会生效。
+     * 注意 1：只作用于指示器，**绝不要动侧边栏**（理由见 startLongPress 的注释）。
+     * 注意 2：仅仅改 params.flags 是不够的，必须调用 updateViewLayout() 才会生效。
      */
-    private fun setOverlaysTouchable(touchable: Boolean) {
-        applyTouchableFlag(sidebarView, sidebarParams, touchable)
+    private fun setIndicatorTouchable(touchable: Boolean) {
         applyTouchableFlag(indicatorRootView, indicatorParams, touchable)
     }
 
@@ -726,9 +755,10 @@ class FloatingWindowService : Service() {
                 val shouldShow = state.isSelectingPosition || state.isPressing
 
                 // 先决定"能不能摸"，再创建窗口，避免新建出来的窗口带着错误的 flag。
-                // 长按期间必须穿透，理由见 startLongPress() 的说明。
+                // 长按期间指示器必须穿透（理由见 startLongPress 的说明）。
+                // 注意只调指示器——侧边栏必须一直可点击，否则按不了「停止」。
                 if (shouldShow) {
-                    setOverlaysTouchable(!state.isPressing)
+                    setIndicatorTouchable(!state.isPressing)
                 }
 
                 if (shouldShow && !indicatorVisible) {
@@ -738,11 +768,11 @@ class FloatingWindowService : Service() {
                 }
                 indicatorVisible = shouldShow
 
-                // 长按结束（正常停止、被系统取消、无障碍服务掉线）时，把触摸能力还给用户。
+                // 长按结束（正常停止、被系统取消、无障碍服务掉线）时，把指示器的触摸能力还给用户。
                 // 放在这里而不是只写在「停止」按钮里，是为了兜住所有结束路径，
-                // 否则一旦漏掉某条路径，用户会发现悬浮窗"点不动了"。
+                // 否则一旦漏掉某条路径，用户会发现指示器"拖不动了"。
                 if (lastPressing && !state.isPressing) {
-                    setOverlaysTouchable(true)
+                    setIndicatorTouchable(true)
                 }
                 lastPressing = state.isPressing
 
