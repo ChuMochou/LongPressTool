@@ -118,15 +118,10 @@ class LongPressGestureDispatcher(
         return null
     }
 
-    /**
-     * 派发一组"按住"。
-     *
-     * @param continueFrom 不为 null 时，表示这一组要接在上一组的最后一笔之后
-     *                     （用 continueStroke，指针全程不抬起）。
-     */
+    /** 派发一组"按住"。 */
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun dispatchHoldGroup(continueFrom: GestureDescription.StrokeDescription? = null) {
-        val gesture = buildHoldGroup(continueFrom)
+    private fun dispatchHoldGroup() {
+        val gesture = buildHoldGroup()
         if (gesture == null) {
             finishHold()
             return
@@ -139,7 +134,7 @@ class LongPressGestureDispatcher(
             TAG,
             "dispatch accepted=$accepted strokes=${gesture.strokeCount} " +
                 "groupEndTime=${last.startTime + last.duration}ms " +
-                "lastWillContinue=${last.willContinue()} relay=$relayCount chained=${continueFrom != null}"
+                "lastWillContinue=${last.willContinue()} relay=$relayCount"
         )
 
         if (!accepted) {
@@ -180,36 +175,22 @@ class LongPressGestureDispatcher(
      * 表面"排了 12 段"，实际只按了 5 秒。这个坑我踩过。
      */
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun buildHoldGroup(
-        continueFrom: GestureDescription.StrokeDescription?
-    ): GestureDescription? {
+    private fun buildHoldGroup(): GestureDescription? {
         val builder = GestureDescription.Builder()
-        var previous: GestureDescription.StrokeDescription
 
         val totalStrokes = CHUNKS_PER_GROUP
 
-        if (continueFrom == null) {
-            // 从 0ms 开始按下。
-            // 当前配置下组内只有一段，用 willContinue = false，让这一笔被**完整执行**
-            // （实测 58 秒能跑满 58.014 秒），于是"一次连续按压"接近 1 分钟。
-            // 若把组内段数调成 > 1，则中间各段需要 true 才能被 continueStroke 串接。
-            previous = GestureDescription.StrokeDescription(
-                holdPath(targetX, targetY),
-                0L,
-                CHUNK_MS,
-                totalStrokes > 1
-            )
-            builder.addStroke(previous)
-        } else {
-            // 仅当组内需要跨手势串联时才会走到这里。
-            previous = try {
-                continueFrom.continueStroke(holdPath(targetX, targetY), 0L, CHUNK_MS, totalStrokes > 1)
-            } catch (e: IllegalStateException) {
-                Log.e(TAG, "continueStroke 失败，结束长按", e)
-                return null
-            }
-            builder.addStroke(previous)
-        }
+        // 从 0ms 开始按下。
+        // 当前配置（组内只有一段）用 willContinue = false，让这一笔被**完整执行**：
+        // 实测 58000ms 的笔画能跑满 58014 / 58081 / 58007ms，
+        // 于是"一次连续按压"接近 1 分钟，这是系统 60 秒上限内能做到的最长连续按压。
+        var previous = GestureDescription.StrokeDescription(
+            holdPath(targetX, targetY),
+            0L,
+            CHUNK_MS,
+            totalStrokes > 1   // 只有组内多段时才需要 true 供续接
+        )
+        builder.addStroke(previous)
 
         // Builder 没有 strokeCount 属性，所以自己数。
         var strokeCount = 1
@@ -233,13 +214,60 @@ class LongPressGestureDispatcher(
     }
 
     /**
+     * 【仅 debug】自测：启动 -> 几秒后停止 -> 再启动，用来验证"停止后再启动"是否正常。
+     *
+     * 为什么要它：adb 点击悬浮窗按钮的坐标很难对齐，但"停止后再启动会不会马上退出"
+     * 这个回归问题必须能自动化验证，所以直接在代码里跑一遍状态机。
+     */
+    fun runStopThenRestartSelfTest(stepDelayMs: Long = 3_000L) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        Log.d(TAG, "=== 自测开始：启动 -> ${stepDelayMs}ms 后停止 -> 再启动 ===")
+
+        h.postDelayed({
+            Log.d(TAG, "自测[1] 启动")
+            Log.d(TAG, "自测[1] startHold -> ${startHold(targetX.toInt(), targetY.toInt())}")
+        }, 0L)
+
+        h.postDelayed({
+            Log.d(TAG, "自测[2] 停止")
+            stopHold()
+        }, stepDelayMs)
+
+        h.postDelayed({
+            Log.d(TAG, "自测[3] 再次启动（关键：这一步以前会立刻自己退出）")
+            val r = startHold(targetX.toInt(), targetY.toInt())
+            Log.d(TAG, "自测[3] startHold -> $r ; holding=$holding activeStroke=${activeStroke != null}")
+        }, stepDelayMs * 2)
+
+        h.postDelayed({
+            Log.d(TAG, "自测[4] 检查 5 秒后是否仍在长按：holding=$holding")
+        }, stepDelayMs * 2 + 5_000L)
+
+        h.postDelayed({
+            Log.d(TAG, "自测[5] 最终停止")
+            stopHold()
+            Log.d(TAG, "=== 自测结束 ===")
+        }, stepDelayMs * 2 + 6_000L)
+    }
+
+    /**
      * 停止长按：立刻让手指抬起。
      *
-     * 无法"取消"已派发的手势，所以用"派发一笔极短的收尾笔画"来达到立刻松手的效果：
-     * 派发新手势会取消当前手势，而收尾笔画自己只有 50ms。
+     * ===== 这里不需要也不能用 continueStroke =====
      *
-     * 注意收尾笔画的 willContinue 必须是 false，否则它会被平台截断成一半时长
-     * （不过 50ms 的一半也不影响体验，这里仍按语义写 false 更清晰）。
+     * 我在这里踩过两次同一个坑：长按笔画为了"跑满 58 秒"被设成 willContinue = false，
+     * 而 continueStroke 要求上一笔必须是 true，于是停止时抛
+     * "Only strokes marked willContinue can be continued"，被 catch 吞掉，
+     * **指针实际上没有被抬起**——现象就是"点了停止没反应，要等 58 秒自己结束"。
+     *
+     * 正确做法反而更简单：**直接派发一支全新的极短笔画**。
+     * 因为"派发新手势会取消进行中的手势"（官方文档），
+     * 这一下就同时完成了两件事：
+     *   1. 取消掉正在执行的 58 秒长按 —— 指针抬起，这就是"停止"；
+     *   2. 用一支 50ms 的极短按压顶替它 —— 短到用户察觉不到。
+     *
+     * 所以停止完全不依赖 continueStroke，也不受 willContinue 取值影响。
      */
     @RequiresApi(Build.VERSION_CODES.O)
     fun stopHold() {
@@ -248,27 +276,22 @@ class LongPressGestureDispatcher(
             return
         }
 
-        val current = activeStroke
+        // 先复位状态：派发收尾笔画会触发 onCancelled，
+        // 那时 holding 已经是 false，回调里就会知道这是"主动停止"而不是"被用户打断"。
         holding = false
         activeStroke = null
         LongPressStateHolder.setPressing(false)
 
-        if (current == null) return
+        val release = GestureDescription.StrokeDescription(
+            holdPath(targetX, targetY),
+            0L,
+            RELEASE_STROKE_MS,
+            false   // 单笔短按，不需要接力
+        )
+        val gesture = GestureDescription.Builder().addStroke(release).build()
 
-        try {
-            val release = current.continueStroke(
-                holdPath(targetX, targetY),
-                0L,
-                RELEASE_STROKE_MS,
-                false   // 不再接力 -> 手指抬起
-            )
-            val gesture = GestureDescription.Builder().addStroke(release).build()
-            accessibilityService.dispatchGesture(gesture, null, null)
-            Log.d(TAG, "stopHold: 已派发收尾笔画")
-        } catch (e: Exception) {
-            // 忽略：最坏情况是等当前组自然结束。
-            Log.w(TAG, "派发收尾笔画失败", e)
-        }
+        val accepted = accessibilityService.dispatchGesture(gesture, null, null)
+        Log.d(TAG, "stopHold: 已派发收尾笔画 accepted=$accepted")
     }
 
     /** 立即放弃长按，不做收尾（用于 onInterrupt：系统要求马上停下）。 */
@@ -312,7 +335,7 @@ class LongPressGestureDispatcher(
             // 但换来的是一次连续按压长达 58 秒，中断频率降到约每分钟一次。
             // 这是系统"单次手势上限 60 秒"约束下的最优折中，详见类注释。
             relayCount++
-            dispatchHoldGroup(continueFrom = null)
+            dispatchHoldGroup()
         }
 
         override fun onCancelled(gestureDescription: GestureDescription) {

@@ -378,6 +378,8 @@ class FloatingWindowService : Service() {
 
         startButton?.setOnClickListener {
             val state = LongPressStateHolder.state.value
+            Log.d(TAG, "点击「启动」hasSelectedPosition=${state.hasSelectedPosition} " +
+                "target=(${state.targetX},${state.targetY}) isPressing=${state.isPressing}")
 
             // 启动前把前提条件查一遍，缺什么就明确告诉用户缺什么（需求第七节）。
             if (!state.hasSelectedPosition) {
@@ -395,6 +397,7 @@ class FloatingWindowService : Service() {
         }
 
         stopButton?.setOnClickListener {
+            Log.d(TAG, "点击「停止」")
             stopLongPress()
         }
     }

@@ -126,5 +126,12 @@ class LongPressAccessibilityService : AccessibilityService() {
 
         /** 服务实例是否真的可用（不是只看系统设置里是否勾选）。 */
         fun isConnected(): Boolean = instance != null
+
+        /**
+         * 【仅 debug】自测"停止后再启动"，见 [LongPressGestureDispatcher.runStopThenRestartSelfTest]。
+         */
+        fun runSelfTest() {
+            instance?.gestureDispatcher?.runStopThenRestartSelfTest()
+        }
     }
 }

@@ -73,6 +73,11 @@ class MainActivity : ComponentActivity() {
         // 不需要在 Manifest 里注册任何 action：MainActivity 已经 exported=true，
         // 而这条 intent **没有声明 action**，只有能用 adb 的 shell/root 能构造出来。
         if (!BuildConfig.DEBUG) return
+        if (intent?.getBooleanExtra(EXTRA_DEBUG_SELFTEST, false) == true) {
+            // 自测：启动 -> 停止 -> 再启动，验证"停止后再启动会不会立刻退出"。
+            LongPressAccessibilityService.runSelfTest()
+            return
+        }
         val x = intent?.getIntExtra(EXTRA_DEBUG_X, -1) ?: -1
         val y = intent?.getIntExtra(EXTRA_DEBUG_Y, -1) ?: -1
         android.util.Log.d("LongPressDebug", "handleDebugHoldIntent x=$x y=$y")
@@ -124,5 +129,6 @@ class MainActivity : ComponentActivity() {
          */
         private const val EXTRA_DEBUG_X = "debug_x"
         private const val EXTRA_DEBUG_Y = "debug_y"
+        private const val EXTRA_DEBUG_SELFTEST = "debug_selftest"
     }
 }
