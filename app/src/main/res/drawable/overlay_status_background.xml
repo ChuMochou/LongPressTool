@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  悬浮侧边栏状态区的背景：浅灰圆角，让"状态"这一块和按钮区分开。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/overlay_status_background" />
+    <corners android:radius="8dp" />
+</shape>

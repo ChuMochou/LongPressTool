@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import com.example.longpresstool.service.LongPressAccessibilityService
 
@@ -18,6 +19,8 @@ import com.example.longpresstool.service.LongPressAccessibilityService
  *   检查 -> 没有 -> 显示说明 -> 跳系统设置 -> 用户开启 -> 回到 App -> 重新检查
  */
 object AccessibilityPermission {
+
+    private const val TAG = "AccessibilityPermission"
 
     /**
      * 本应用的无障碍服务在系统设置里是否**已开启**。
@@ -58,14 +61,34 @@ object AccessibilityPermission {
             AccessibilityServiceInfo.FEEDBACK_ALL_MASK
         )
 
-        // ComponentName.flattenToString() 产生的格式与 AccessibilityServiceInfo.id 完全一致，
-        // 例如 "com.example.longpresstool/com.example.longpresstool.service.LongPressAccessibilityService"
-        val targetId = ComponentName(
-            context.packageName,
-            LongPressAccessibilityService::class.java.name
-        ).flattenToString()
+        // 同时用两种方式比对，避免某一种格式判断失效导致误判"未开启"：
+        // 1. 直接拿 AccessibilityServiceInfo.id 和 ComponentName.flattenToString() 比；
+        // 2. 从 id 反解出 ComponentName，再比较包名和类名。
+        // 注意：这里只能**宽松**匹配，绝不能"宽松地认定未开启"，
+        // 否则会出现"服务明明开着，App 却一直提示去开启"的死循环。
+        val targetPackage = context.packageName
+        val targetClass = LongPressAccessibilityService::class.java.name
+        val targetId = ComponentName(targetPackage, targetClass).flattenToString()
 
-        return enabledServices.firstOrNull { it.id == targetId }
+        val found = enabledServices.firstOrNull { info ->
+            val id = info.id ?: return@firstOrNull false
+            val byFlatten = id == targetId
+            val byUnflatten = ComponentName.unflattenFromString(id)?.let {
+                it.packageName == targetPackage && it.className == targetClass
+            } ?: false
+            byFlatten || byUnflatten
+        }
+
+        if (found == null) {
+            Log.d(
+                TAG,
+                "未在已启用列表中找到本服务。期望: $targetId；" +
+                    "已启用(过滤后): ${enabledServices.map { it.id }}；" +
+                    "全量已安装: ${manager.getInstalledAccessibilityServiceList().map { it.id }}；" +
+                    "无障碍总开关: ${manager.isEnabled}"
+            )
+        }
+        return found
     }
 
     /**

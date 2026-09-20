@@ -4,6 +4,9 @@
 
 # 本地构建用的 Gradle 缓存（沙箱/CI 场景下用 GRADLE_USER_HOME 指到这里）
 /.gradle/user-home/
+
+# Kotlin 编译器的本地缓存与错误日志：都是构建产物，不是源码
+/.kotlin/
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml

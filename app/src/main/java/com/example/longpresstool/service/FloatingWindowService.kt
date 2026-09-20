@@ -14,7 +14,9 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.util.TypedValue
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -125,6 +127,39 @@ class FloatingWindowService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * 专门用来加载悬浮窗布局的 Context。
+     *
+     * 为什么要这么绕：悬浮窗是 Service 添加的，而 **Service 的 Context 主题
+     * 和 Activity 不是一回事**。如果布局里用了依赖主题的属性（哪怕只是
+     * ?attr/textAppearanceBodySmall 这种文字样式），在部分设备上会取不到值，
+     * 严重时直接抛异常导致闪退（本项目就踩过 MaterialCardView 那个坑）。
+     *
+     * 这里的做法是显式给布局加载器套上应用自己的主题，让结果与设备无关。
+     * 即使主题解析失败（例如被 ROM 改动），也只是回退到无主题包装，
+     * 因为布局本身已经做到零主题依赖，不会崩。
+     */
+    private val layoutContext: Context by lazy {
+        val themeResId = resolveAppThemeResId()
+        if (themeResId != 0) {
+            ContextThemeWrapper(this, themeResId)
+        } else {
+            Log.w(TAG, "未能解析到应用主题 Theme.LongPressTool，悬浮窗将使用默认外观")
+            this
+        }
+    }
+
+    private fun resolveAppThemeResId(): Int {
+        // 应用的 android:theme 就记录在 ApplicationInfo.theme 里，直接读它最可靠。
+        // 别用 obtainStyledAttributes(intArrayOf(android.R.attr.theme)) —— 在 Service 里
+        // 它可能读不到 application 上的主题（本项目实测返回 0）。
+        return try {
+            applicationInfo.theme
+        } catch (e: Exception) {
+            0
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WindowManager::class.java)
@@ -133,7 +168,16 @@ class FloatingWindowService : Service() {
         // 升为前台 Service。内部已经处理了失败情况，不会抛异常。
         promoteToForeground()
 
-        showSidebar()
+        // 整个 onCreate 都不允许因为单个界面问题把 App 拖崩（需求第十三节：Service 异常退出）。
+        // 侧边栏起不来时，至少要把前台服务干净地结束掉，而不是抛异常崩溃。
+        try {
+            showSidebar()
+        } catch (e: Exception) {
+            Log.e(TAG, "显示悬浮侧边栏失败", e)
+            stopSelf()
+            return
+        }
+
         observeState()
     }
 
@@ -238,7 +282,8 @@ class FloatingWindowService : Service() {
 
         // 给 inflate() 传一个临时父容器（而不是 null），这样布局根节点上的
         // layout_* 参数才会被正确解析。
-        val view = LayoutInflater.from(this)
+        // 用 layoutContext 而不是 this，理由见 layoutContext 的注释。
+        val view = LayoutInflater.from(layoutContext)
             .inflate(R.layout.overlay_sidebar, FrameLayout(this), false)
 
         val saved = AppPreferences.loadSidebarPosition(this)
@@ -300,7 +345,7 @@ class FloatingWindowService : Service() {
         startButton?.setOnClickListener {
             val state = LongPressStateHolder.state.value
 
-            // 启动前把三个前提条件查一遍，缺什么就明确告诉用户缺什么（需求第七节）。
+            // 启动前把前提条件查一遍，缺什么就明确告诉用户缺什么（需求第七节）。
             if (!state.hasSelectedPosition) {
                 Toast.makeText(this, R.string.error_no_position_selected, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
@@ -312,14 +357,84 @@ class FloatingWindowService : Service() {
                 return@setOnClickListener
             }
 
-            // Phase 5 会在这里通过无障碍服务派发真实的长按手势。
-            Toast.makeText(this, "长按执行将在 Phase 5 实现", Toast.LENGTH_SHORT).show()
+            startLongPress(state.targetX, state.targetY)
         }
 
         stopButton?.setOnClickListener {
-            // Phase 5 会在这里结束长按手势。
-            Toast.makeText(this, "停止功能将在 Phase 5 实现", Toast.LENGTH_SHORT).show()
+            stopLongPress()
         }
+    }
+
+    // ==================== 长按的启动与停止 ====================
+
+    /**
+     * 开始长按。
+     *
+     * 顺序很重要：
+     * 1. 先让两个悬浮窗"触摸穿透"（FLAG_NOT_TOUCHABLE）；
+     * 2. 再派发手势。
+     *
+     * 为什么必须这样（这是 Phase 5 最容易翻车的地方）：
+     * dispatchGesture 注入的触摸，会交给**该坐标上最上层的可触摸窗口**。
+     * 指示器圆形默认就压在目标点上，如果它还能接收触摸，
+     * 那么这次"长按"会被我们自己的悬浮窗吃掉，被长按的那个 App 根本收不到事件。
+     * 所以长按期间指示器必须"看得见但摸不着"。
+     */
+    private fun startLongPress(x: Int, y: Int) {
+        setOverlaysTouchable(false)
+
+        val result = LongPressAccessibilityService.startHold(x, y)
+
+        if (result == null) {
+            // startHold 内部会通过状态流驱动界面，这里不用手动改状态。
+            Toast.makeText(this, R.string.overlay_status_pressing_short, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // 启动失败：把触摸能力还回去，否则用户连指示器都拖不动了。
+        setOverlaysTouchable(true)
+
+        val messageRes = when (result) {
+            HoldStartResult.ServiceNotConnected -> R.string.error_accessibility_not_connected
+            HoldStartResult.UnsupportedAndroidVersion -> R.string.error_unsupported_android_version
+            HoldStartResult.AlreadyRunning -> R.string.error_already_pressing
+        }
+        Toast.makeText(this, messageRes, Toast.LENGTH_LONG).show()
+    }
+
+    /** 停止长按。手势会在 1 秒内自然抬起（无法取消已派发的手势，见派发器的说明）。 */
+    private fun stopLongPress() {
+        LongPressAccessibilityService.stopHold()
+        // 立刻把触摸能力还回去，用户马上又能拖动指示器。
+        setOverlaysTouchable(true)
+    }
+
+    /**
+     * 控制两个悬浮窗是否接收触摸。
+     *
+     * @param touchable false = 加 FLAG_NOT_TOUCHABLE，窗口变成"看得见但摸不着"，
+     *                  触摸穿过它交给下层的其他应用。长按期间必须是 false。
+     *
+     * 注意：仅仅改 params.flags 是不够的，必须调用 updateViewLayout() 才会生效。
+     */
+    private fun setOverlaysTouchable(touchable: Boolean) {
+        applyTouchableFlag(sidebarView, sidebarParams, touchable)
+        applyTouchableFlag(indicatorRootView, indicatorParams, touchable)
+    }
+
+    private fun applyTouchableFlag(
+        view: View?,
+        params: WindowManager.LayoutParams?,
+        touchable: Boolean
+    ) {
+        if (view == null || params == null) return
+
+        params.flags = if (touchable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        safeUpdateLayout(view, params)
     }
 
     /**
@@ -407,7 +522,7 @@ class FloatingWindowService : Service() {
         if (indicatorRootView != null) return
         if (!OverlayPermission.isGranted(this)) return
 
-        val root = LayoutInflater.from(this)
+        val root = LayoutInflater.from(layoutContext)
             .inflate(R.layout.overlay_position_indicator, FrameLayout(this), false)
 
         val params = WindowManager.LayoutParams(
@@ -462,6 +577,13 @@ class FloatingWindowService : Service() {
         root.setOnTouchListener { _, event ->
             val params = indicatorParams ?: return@setOnTouchListener false
             val myRoot = indicatorRootView ?: return@setOnTouchListener false
+
+            // 长按期间两个窗口都是 FLAG_NOT_TOUCHABLE，本来收不到事件；
+            // 但"刚加上 flag 的那一瞬间"可能还有一个在途的 UP/CANCEL。
+            // 这里直接吃掉，避免把正在长按的坐标改掉。
+            if (LongPressStateHolder.state.value.isPressing) {
+                return@setOnTouchListener true
+            }
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -559,6 +681,7 @@ class FloatingWindowService : Service() {
     private fun observeState() {
         var indicatorVisible = false
         var lastAccessibilityEnabled = LongPressStateHolder.state.value.isAccessibilityEnabled
+        var lastPressing = LongPressStateHolder.state.value.isPressing
 
         serviceScope.launch {
             LongPressStateHolder.state.collectLatest { state ->
@@ -567,12 +690,27 @@ class FloatingWindowService : Service() {
                 // 指示器只在"选择位置"和"长按中"出现：
                 // 选择时要能拖，长按时要能看到视觉状态变化（需求第八节）。
                 val shouldShow = state.isSelectingPosition || state.isPressing
+
+                // 先决定"能不能摸"，再创建窗口，避免新建出来的窗口带着错误的 flag。
+                // 长按期间必须穿透，理由见 startLongPress() 的说明。
+                if (shouldShow) {
+                    setOverlaysTouchable(!state.isPressing)
+                }
+
                 if (shouldShow && !indicatorVisible) {
                     showIndicator()
                 } else if (!shouldShow && indicatorVisible) {
                     hideIndicator()
                 }
                 indicatorVisible = shouldShow
+
+                // 长按结束（正常停止、被系统取消、无障碍服务掉线）时，把触摸能力还给用户。
+                // 放在这里而不是只写在「停止」按钮里，是为了兜住所有结束路径，
+                // 否则一旦漏掉某条路径，用户会发现悬浮窗"点不动了"。
+                if (lastPressing && !state.isPressing) {
+                    setOverlaysTouchable(true)
+                }
+                lastPressing = state.isPressing
 
                 indicatorView?.setPressing(state.isPressing)
             }
@@ -803,6 +941,7 @@ class FloatingWindowService : Service() {
         (px / resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val TAG = "FloatingWindowService"
         private const val CHANNEL_ID = "long_press_tool_overlay"
         private const val NOTIFICATION_ID = 1001
 

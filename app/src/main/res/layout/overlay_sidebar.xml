@@ -2,29 +2,35 @@
 <!--
   悬浮侧边栏的布局。
 
-  为什么用 XML 而不是 Compose：
+  ===== 为什么全部用系统原生控件，而不是 Material 控件？=====
+  这里踩过一个真实的坑，值得记下来：
+  Material 控件（MaterialCardView / MaterialButton）在构造时会检查
+  "当前主题必须是 Theme.MaterialComponents 的后代"，不满足就直接抛异常。
+  而悬浮窗是 **Service** 添加的，Service 的 Context 主题来源和 Activity 不同，
+  在真机上完全可能出现取不到应用主题的情况 —— 现象就是点「启动长按器」时闪退。
+
+  所以这个布局刻意做到"零主题依赖"：
+  - 卡片用 FrameLayout + 自绘圆角背景，不用 MaterialCardView；
+  - 按钮用 android.widget.Button + 自绘 selector；
+  - 所有颜色都写死成 @color 常量，不引用 ?attr/xxx 主题属性。
+
+  代价是按钮外观要自己写，换来的是"在任何设备、任何系统版本、任何主题下都不会崩"。
+
+  ===== 为什么用 XML 而不是 Compose？=====
   悬浮窗不属于任何 Activity，要在里面用 Compose 得额外搭 ComposeView + LifecycleOwner
   + SavedStateRegistryOwner 三件套。这个侧边栏只是几个按钮，用 XML 更直接、更好调试。
-  以后如果侧边栏变复杂，再评估是否换成 Compose。
-
-  注意：这里没有引入 Material 的 Toolbar/AppBar，标题只是普通 TextView，
-  避免把 Material 主题的复杂度带进悬浮窗。
 -->
-<com.google.android.material.card.MaterialCardView
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/sidebar_root"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    app:cardCornerRadius="16dp"
-    app:cardElevation="8dp"
-    app:cardUseCompatPadding="true">
+    android:background="@drawable/overlay_card_background"
+    android:padding="12dp">
 
     <LinearLayout
         android:layout_width="216dp"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="12dp">
+        android:orientation="vertical">
 
         <!-- ===== 顶部：标题 + 关闭 ===== -->
         <LinearLayout
@@ -38,18 +44,21 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="@string/overlay_sidebar_title"
-                android:textAppearance="?attr/textAppearanceTitleMedium" />
+                android:textColor="@color/overlay_text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/button_close"
-                style="@style/LongPressOverlayButton.Secondary"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:background="@android:color/transparent"
                 android:minWidth="0dp"
                 android:minHeight="0dp"
                 android:paddingHorizontal="8dp"
                 android:paddingVertical="4dp"
                 android:text="@string/overlay_close"
+                android:textColor="@color/overlay_button_secondary_text"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -58,7 +67,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:background="?attr/colorSurfaceVariant"
+            android:background="@drawable/overlay_status_background"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="10dp"
@@ -78,33 +87,40 @@
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:text="@string/overlay_status_not_selected"
-                android:textAppearance="?attr/textAppearanceBodyMedium" />
+                android:textColor="@color/overlay_text_primary"
+                android:textSize="13sp" />
         </LinearLayout>
 
         <!-- ===== 操作按钮 ===== -->
         <Button
             android:id="@+id/button_select_position"
-            style="@style/LongPressOverlayButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="@string/action_select_position" />
+            android:background="@drawable/overlay_button_primary"
+            android:text="@string/action_select_position"
+            android:textColor="@color/overlay_button_primary_text"
+            android:textSize="14sp" />
 
         <Button
             android:id="@+id/button_start"
-            style="@style/LongPressOverlayButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="@string/action_start_long_press" />
+            android:background="@drawable/overlay_button_primary"
+            android:text="@string/action_start_long_press"
+            android:textColor="@color/overlay_button_primary_text"
+            android:textSize="14sp" />
 
         <Button
             android:id="@+id/button_stop"
-            style="@style/LongPressOverlayButton.Secondary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="@string/action_stop_long_press" />
+            android:background="@drawable/overlay_button_secondary"
+            android:text="@string/action_stop_long_press"
+            android:textColor="@color/overlay_button_secondary_text"
+            android:textSize="14sp" />
 
         <!-- ===== 提示文字：说明下一步该做什么 ===== -->
         <TextView
@@ -113,8 +129,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/overlay_hint_choose_position"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?android:attr/textColorSecondary" />
+            android:textColor="@color/overlay_text_secondary"
+            android:textSize="11sp" />
 
         <!-- ===== 限制说明：只在「长按中」显示 ===== -->
         <TextView
@@ -123,8 +139,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="@string/overlay_hint_max_duration"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?android:attr/textColorSecondary"
+            android:textColor="@color/overlay_text_secondary"
+            android:textSize="11sp"
             android:visibility="gone" />
     </LinearLayout>
-</com.google.android.material.card.MaterialCardView>
+</FrameLayout>

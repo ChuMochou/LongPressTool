@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主按钮（选择位置 / 启动）：实心紫底白字。
+  自己写一份带"禁用态"的 selector，是因为不依赖 Material 主题后，
+  按钮不会再自动变灰——必须由我们自己表达"这个按钮现在不能点"。
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/overlay_button_disabled" />
+            <corners android:radius="20dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/overlay_button_primary" />
+            <corners android:radius="20dp" />
+        </shape>
+    </item>
+</selector>

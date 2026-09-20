@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  悬浮侧边栏卡片背景：圆角矩形 + 一点描边，替代 MaterialCardView。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/overlay_card_background" />
+    <corners android:radius="16dp" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/overlay_card_stroke" />
+</shape>

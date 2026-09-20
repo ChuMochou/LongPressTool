@@ -21,4 +21,21 @@
     <!-- 指示器下方坐标文字的底色与文字色 -->
     <color name="indicator_label_background">#CC000000</color>
     <color name="indicator_label_text">#FFFFFFFF</color>
+
+    <!--
+      悬浮侧边栏自身的配色。
+      刻意写成固定的颜色常量，而不是引用主题属性（?attr/colorSurface 之类）：
+      悬浮窗由 Service 添加，而 Service 的 Context 主题来源和 Activity 不同，
+      依赖主题属性会引入"在有些设备上取不到值"的风险。写死颜色最稳。
+      （这正是本项目踩过的坑：MaterialCardView 在 Service 里因主题不符直接崩溃。）
+    -->
+    <color name="overlay_card_background">#F7F2FA</color>
+    <color name="overlay_card_stroke">#33000000</color>
+    <color name="overlay_status_background">#E8DEF8</color>
+    <color name="overlay_text_primary">#1C1B1F</color>
+    <color name="overlay_text_secondary">#49454F</color>
+    <color name="overlay_button_primary">#6750A4</color>
+    <color name="overlay_button_primary_text">#FFFFFFFF</color>
+    <color name="overlay_button_secondary_text">#6750A4</color>
+    <color name="overlay_button_disabled">#33000000</color>
 </resources>
