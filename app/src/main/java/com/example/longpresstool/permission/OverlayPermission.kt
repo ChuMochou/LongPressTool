@@ -2,8 +2,8 @@ package com.example.longpresstool.permission
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.provider.Settings
+import androidx.core.net.toUri
 
 /**
  * 悬浮窗权限（SYSTEM_ALERT_WINDOW）的检查与引导。
@@ -36,7 +36,8 @@ object OverlayPermission {
      */
     fun buildSettingsIntent(context: Context): Intent =
         Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-            data = Uri.parse("package:${context.packageName}")
+            // toUri() 是 core-ktx 提供的扩展，等价于 Uri.parse()，但更不易写错。
+            data = "package:${context.packageName}".toUri()
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 

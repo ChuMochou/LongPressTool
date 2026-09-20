@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.IBinder
 import android.util.TypedValue
@@ -18,14 +19,17 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.OnApplyWindowInsetsListener
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.example.longpresstool.MainActivity
 import com.example.longpresstool.R
 import com.example.longpresstool.model.LongPressPhase
@@ -33,6 +37,7 @@ import com.example.longpresstool.model.LongPressStateHolder
 import com.example.longpresstool.model.SidebarPosition
 import com.example.longpresstool.permission.AppPreferences
 import com.example.longpresstool.permission.OverlayPermission
+import com.example.longpresstool.ui.widget.TouchIndicatorView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,43 +47,57 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
- * 悬浮侧边栏的宿主 Service。
+ * 悬浮界面的宿主 Service。
  *
  * ===== 为什么必须是 Service，不能是 Activity？ =====
- * 需求要求侧边栏"在其他 App 运行时继续存在"。Activity 只有在它自己处于前台时才可见，
- * 用户一切走到别的应用，Activity 就进入后台、界面不可见了。这是 Android 的窗口管理机制，
- * 不是权限问题。所以跨应用的悬浮界面只能由 Service（在这里）通过 WindowManager 添加。
+ * 需求要求侧边栏"在其他 App 运行时继续存在"。Activity 只有自己在前台时才可见，
+ * 用户一切到别的应用，界面就没了。这是 Android 的窗口管理机制，不是权限问题。
+ * 所以跨应用的悬浮界面只能由 Service 通过 WindowManager 添加。
  *
  * ===== 为什么是"前台 Service"？ =====
- * Android 8.0 起，后台 Service 会被系统随时限制；有长期可见界面的 Service 必须
- * 用 startForeground() 提升为前台 Service 并显示一条常驻通知。
- * 这不是可选项——不做的话进程随时可能被杀，悬浮窗就消失了。
+ * Android 8.0 起，带有长期可见界面的 Service 必须 startForeground() 并显示常驻通知，
+ * 否则进程随时可能被系统回收，悬浮窗就消失了。Android 14 (API 34) 起还必须声明
+ * foregroundServiceType（本应用为 specialUse）。
  *
- * ===== 窗口类型为什么用 TYPE_APPLICATION_OVERLAY？ =====
- * 这是 Android 8.0 起唯一对普通应用开放的悬浮窗类型（旧类型如 TYPE_PHONE 在 26+ 已失效），
- * 它需要 SYSTEM_ALERT_WINDOW 权限。
- * 另一条路线是 TYPE_ACCESSIBILITY_OVERLAY（不需要这个权限，但要开无障碍服务），
- * 会在 Phase 4 引入无障碍服务时一起讨论。
+ * ===== 本类管两个悬浮窗 =====
+ * 1. 控制侧边栏（overlay_sidebar.xml）—— 按钮操作区；
+ * 2. 圆形位置指示器（overlay_position_indicator.xml）—— 只在"选择位置"时出现。
+ * 两者是独立窗口：指示器可以拖到任何地方，不会因为侧边栏挡着而选不了位置。
  *
- * ===== 本类当前范围（Phase 2） =====
- * 只负责：显示侧边栏、拖动、关闭、按状态更新文字。
- * "选择位置"和"启动/停止"目前只改状态或给出提示，真正的功能在 Phase 3 和 Phase 5 实现。
+ * ===== 坐标系（本项目最容易出错的地方，务必看懂） =====
+ * dispatchGesture() 需要的是**屏幕绝对坐标**（原点 = 真实屏幕左上角，包含状态栏和刘海区域）。
+ *
+ * 指示器窗口的做法是：窗口尺寸正好 60dp x 96dp，圆形占左上角 60dp x 60dp，并且
+ * **故意不加 FLAG_LAYOUT_NO_LIMITS 之类的特殊 flag**。这样窗口位置就是相对于
+ * 真实屏幕左上角计算的，于是：
+ *
+ *     圆心屏幕坐标 = (窗口 x + 30dp, 窗口 y + 30dp)
+ *
+ * 不需要任何跨版本的坐标换算。之所以强调这点：
+ * 加了 FLAG_LAYOUT_NO_LIMITS 后窗口坐标系会变成"包含状态栏/导航栏的全部区域"，
+ * 而且这个行为在 API >= 30 时用的是 displayFrame、在 24~29 时用的是
+ * 状态栏高度与导航栏可见性推算，**不同版本结论不一致**，很容易写出只在一部分手机上正确的代码。
+ * 我们直接绕开这个坑：不碰那个 flag，坐标就是绝对坐标。
  */
 class FloatingWindowService : Service() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var notificationManager: NotificationManager
 
-    /** 添加到 WindowManager 的根视图。 */
+    /** 侧边栏的根视图与窗口参数。 */
     private var sidebarView: View? = null
+    private var sidebarParams: WindowManager.LayoutParams? = null
 
-    /** 侧边栏当前的窗口参数，拖动时直接改它再 updateViewLayout。 */
-    private var layoutParams: WindowManager.LayoutParams? = null
+    /** 圆形位置指示器的根视图与窗口参数。 */
+    private var indicatorRootView: View? = null
+    private var indicatorView: TouchIndicatorView? = null
+    private var indicatorLabelView: TextView? = null
+    private var indicatorParams: WindowManager.LayoutParams? = null
 
-    /** Service 自己的协程作用域，用来订阅状态流、更新界面。onDestroy 时必须取消。 */
+    /** Service 自己的协程作用域，用来订阅状态流。onDestroy 必须取消。 */
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    // ---- 视图引用：只在 showSidebar() 之后有效，用 ""!!"" 会崩，所以用可空 + 判空 ----
+    // ---- 侧边栏里的视图引用。showSidebar() 之后才有效，所以都用可空类型 ----
     private var statusDotView: View? = null
     private var statusTextView: TextView? = null
     private var hintTextView: TextView? = null
@@ -88,12 +107,18 @@ class FloatingWindowService : Service() {
     private var stopButton: Button? = null
     private var closeButton: Button? = null
 
-    // ---- 拖动过程中的临时数据 ----
-    private var dragStartRawX = 0f
-    private var dragStartRawY = 0f
-    private var dragStartParamX = 0
-    private var dragStartParamY = 0
-    private var isDragging = false
+    // ---- 侧边栏拖动过程中的临时数据 ----
+    private var sidebarDragStartRawX = 0f
+    private var sidebarDragStartRawY = 0f
+    private var sidebarDragStartParamX = 0
+    private var sidebarDragStartParamY = 0
+    private var isDraggingSidebar = false
+
+    // ---- 指示器拖动过程中的临时数据 ----
+    private var indicatorDragStartRawX = 0f
+    private var indicatorDragStartRawY = 0f
+    private var indicatorDragStartParamX = 0
+    private var indicatorDragStartParamY = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -102,24 +127,21 @@ class FloatingWindowService : Service() {
         windowManager = getSystemService(WindowManager::class.java)
         notificationManager = getSystemService(NotificationManager::class.java)
 
-        // 设为前台 Service 并显示常驻通知。
-        // 即使因为通知被禁用等原因失败，promoteToForeground() 也不会抛异常，
-        // 侧边栏会照常显示（功能优先），所以这里不需要额外分支。
+        // 升为前台 Service。内部已经处理了失败情况，不会抛异常。
         promoteToForeground()
 
         showSidebar()
         observeState()
     }
 
+    // ==================== 前台 Service 与通知 ====================
+
     /**
-     * 成为前台 Service。
-     *
-     * Android 14 (API 34) 起，startForeground() 必须声明 foregroundServiceType
-     * （在 AndroidManifest.xml 里声明为 specialUse，并申请 FOREGROUND_SERVICE_SPECIAL_USE），
-     * 否则会抛异常直接崩掉。这里做版本判断。
+     * Android 14 (API 34) 起，startForeground() 必须带上 foregroundServiceType，
+     * 否则会抛异常直接崩溃。类型必须与 AndroidManifest 里声明的一致。
      */
-    private fun promoteToForeground(): Boolean {
-        return try {
+    private fun promoteToForeground() {
+        try {
             createNotificationChannel()
             val notification = buildNotification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34+
@@ -132,12 +154,10 @@ class FloatingWindowService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
             isRunning = true
-            true
         } catch (e: Exception) {
-            // 例如用户在设置里禁用了本应用的通知、或某些 ROM 限制严格。
-            // 不要因此崩溃：侧边栏照常显示，只是持久性差一些。
+            // 例如用户在设置里禁用了本应用的通知、或 ROM 限制严格。
+            // 侧边栏照常显示（功能优先），但持久性会差一些。绝不因此崩溃。
             isRunning = true
-            false
         }
     }
 
@@ -149,7 +169,7 @@ class FloatingWindowService : Service() {
         val channel = NotificationChannel(
             CHANNEL_ID,
             getString(R.string.notification_channel_name),
-            NotificationManager.IMPORTANCE_LOW   // 低重要性：不响铃、不弹横幅，常驻即可
+            NotificationManager.IMPORTANCE_LOW   // 低重要性：不响铃、不弹横幅
         ).apply {
             description = getString(R.string.notification_channel_description)
             setShowBadge(false)
@@ -158,7 +178,6 @@ class FloatingWindowService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        // 点通知回到首页。
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
@@ -171,17 +190,42 @@ class FloatingWindowService : Service() {
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_text))
             .setContentIntent(contentIntent)
-            .setOngoing(true)          // 常驻，用户不能划掉（只能通过关闭侧边栏结束）
+            .setOngoing(true)   // 常驻，用户不能划掉（通过侧边栏的「关闭」结束）
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
-    // ==================== 显示侧边栏 ====================
+    // ==================== 悬浮窗的通用参数 ====================
+
+    /**
+     * 选一个当前系统版本真正支持的悬浮窗类型。
+     *
+     * - Android 8.0 (API 26) 及以上：只能用 TYPE_APPLICATION_OVERLAY。
+     *   老类型（TYPE_PHONE / TYPE_SYSTEM_ALERT 等）从 26 起对普通应用全面失效，
+     *   继续使用会抛 BadTokenException 直接崩溃。
+     * - Android 7.x (API 24 / 25)：系统还不认识 TYPE_APPLICATION_OVERLAY，只能用当时的 TYPE_PHONE。
+     *
+     * TYPE_PHONE 虽然标记为 @Deprecated，但这是兼容 24/25 的唯一做法；
+     * API 26+ 永远不会走到这个分支。
+     */
+    @Suppress("DEPRECATION")
+    private fun resolveWindowType(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+    }
+
+    /** 两个悬浮窗共用的 flag：不抢焦点，但**不影响点击**。 */
+    private val baseWindowFlags: Int
+        get() = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+
+    // ==================== 侧边栏 ====================
 
     private fun showSidebar() {
         if (sidebarView != null) return   // 已经显示，避免重复添加窗口
 
-        // 权限可能被用户在设置里撤销，加窗口前必须再确认一次，否则会抛异常。
         if (!OverlayPermission.isGranted(this)) {
             Toast.makeText(this, R.string.overlay_permission_hint_not_granted, Toast.LENGTH_LONG)
                 .show()
@@ -193,76 +237,40 @@ class FloatingWindowService : Service() {
         // layout_* 参数才会被正确解析。
         val view = LayoutInflater.from(this)
             .inflate(R.layout.overlay_sidebar, FrameLayout(this), false)
-        val params = createLayoutParams()
+
+        val saved = AppPreferences.loadSidebarPosition(this)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            resolveWindowType(),
+            baseWindowFlags,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dpToPx(saved.xDp)
+            y = dpToPx(saved.yDp)
+        }
 
         try {
             windowManager.addView(view, params)
         } catch (e: Exception) {
             // 例如权限刚被撤销、或同类型窗口被系统拒绝。不要崩溃。
-            sidebarView = null
             stopSelf()
             return
         }
 
         sidebarView = view
-        layoutParams = params
+        sidebarParams = params
 
-        bindViews(view)
-        setupClickListeners()
-        // 整个侧边栏都可以拖动（按钮除外，见 setupDragToMove 的说明）
-        setupDragToMove(view)
+        bindSidebarViews(view)
+        setupSidebarClickListeners()
+        setupSidebarDrag(view)
+        observeInsetsChanges(view)
+        clampSidebarIntoScreen(params)
+        safeUpdateLayout(view, params)
     }
 
-    /**
-     * 悬浮窗的窗口参数。
-     *
-     * 两个 flag 值得解释：
-     * - FLAG_NOT_FOCUSABLE：侧边栏不抢输入焦点，否则会挡住其他应用输入法、返回键也失效。
-     *   但它**不影响按钮点击**，点击仍然正常。
-     * - FLAG_LAYOUT_IN_SCREEN：让窗口的坐标系以整个屏幕左上角为原点，
-     *   与后面 dispatchGesture() 使用的屏幕绝对坐标一致，省掉一层坐标换算。
-     */
-    private fun createLayoutParams(): WindowManager.LayoutParams {
-        val saved = AppPreferences.loadSidebarPosition(this)
-        return WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            resolveWindowType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            // 以屏幕左上角为基准定位，x / y 就是距离左上角的偏移。
-            gravity = Gravity.TOP or Gravity.START
-            x = dpToPx(saved.xDp)
-            y = dpToPx(saved.yDp)
-        }
-    }
-
-    /**
-     * 选一个当前系统版本真正支持的悬浮窗类型。
-     *
-     * 这是本项目里第一个必须做版本判断的关键 API：
-     *
-     * - Android 8.0 (API 26) 及以上：只能用 TYPE_APPLICATION_OVERLAY。
-     *   老类型（TYPE_PHONE / TYPE_SYSTEM_ALERT 等）从 26 起对普通应用全面失效，
-     *   继续使用会直接抛 BadTokenException 导致崩溃。
-     * - Android 7.x (API 24 / 25)：系统还不认识 TYPE_APPLICATION_OVERLAY
-     *   （它的常量值 2038 是 26 才存在的），所以只能用当时的 TYPE_PHONE。
-     *
-     * TYPE_PHONE 在这里被标记为 @Deprecated，但这不是"用了过时 API"，
-     * 而是为了兼容 24/25 的**唯一**可行做法。API 26+ 永远不会走到这个分支。
-     */
-    @Suppress("DEPRECATION")
-    private fun resolveWindowType(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-    }
-
-    private fun bindViews(root: View) {
+    private fun bindSidebarViews(root: View) {
         statusDotView = root.findViewById(R.id.status_dot)
         statusTextView = root.findViewById(R.id.text_status)
         hintTextView = root.findViewById(R.id.text_hint)
@@ -273,12 +281,17 @@ class FloatingWindowService : Service() {
         closeButton = root.findViewById(R.id.button_close)
     }
 
-    private fun setupClickListeners() {
-        closeButton?.setOnClickListener { closeSidebar() }
+    private fun setupSidebarClickListeners() {
+        closeButton?.setOnClickListener { closeEverything() }
 
         selectPositionButton?.setOnClickListener {
-            // Phase 3 会在这里创建"圆形位置指示器"窗口。
-            Toast.makeText(this, "位置选择将在 Phase 3 实现", Toast.LENGTH_SHORT).show()
+            val state = LongPressStateHolder.state.value
+            if (state.isSelectingPosition) {
+                // 再次点击 = 完成选择：隐藏指示器，但保留刚才记录的坐标。
+                LongPressStateHolder.setSelectingPosition(false)
+            } else {
+                LongPressStateHolder.setSelectingPosition(true)
+            }
         }
 
         startButton?.setOnClickListener {
@@ -295,50 +308,43 @@ class FloatingWindowService : Service() {
     /**
      * 让整个侧边栏可以用手指拖动。
      *
-     * 这里有两个关键点，初学者很容易踩坑：
-     *
+     * 两个关键点：
      * 1. 用 rawX / rawY（相对整个屏幕）而不是 x / y（相对被触摸的 View）。
-     *    因为拖动过程中 View 自己在移动，用相对坐标会越拖越飘。
+     *    拖动时 View 自己在移动，用相对坐标会越拖越飘。
+     * 2. 必须自己区分"拖动"和"点击"：OnTouchListener 在 onTouchEvent **之前**拿到事件，
+     *    无条件返回 true 按钮就永远收不到点击。所以只有位移超过系统阈值才算拖动。
      *
-     * 2. 必须自己区分"拖动"和"点击"：
-     *    View 的 OnTouchListener 会在 onTouchEvent **之前**拿到事件，
-     *    如果这里无条件返回 true，按钮就永远收不到点击了。
-     *    所以只有移动距离超过系统触摸阈值时才算拖动，否则返回 false 把事件交还给子 View。
-     *
-     * 补充：按钮上的 OnTouchListener 在 View 自己"可点击"时不会触发，
-     * 所以拖动手势天然不会和按钮点击冲突。
+     * 补充：View 自己"可点击"时不会触发它的 OnTouchListener，
+     * 所以按钮上的点击手势天然不会和拖动手势冲突。
      */
-    private fun setupDragToMove(root: View) {
+    private fun setupSidebarDrag(root: View) {
         val touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop
 
         root.setOnTouchListener { _, event ->
-            val params = layoutParams ?: return@setOnTouchListener false
+            val params = sidebarParams ?: return@setOnTouchListener false
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    dragStartRawX = event.rawX
-                    dragStartRawY = event.rawY
-                    dragStartParamX = params.x
-                    dragStartParamY = params.y
-                    isDragging = false
+                    sidebarDragStartRawX = event.rawX
+                    sidebarDragStartRawY = event.rawY
+                    sidebarDragStartParamX = params.x
+                    sidebarDragStartParamY = params.y
+                    isDraggingSidebar = false
                     false   // 返回 false，让子 View（按钮）有机会处理这次点击
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - dragStartRawX
-                    val dy = event.rawY - dragStartRawY
+                    val dx = event.rawX - sidebarDragStartRawX
+                    val dy = event.rawY - sidebarDragStartRawY
 
-                    if (!isDragging &&
-                        (abs(dx) > touchSlop || abs(dy) > touchSlop)
-                    ) {
-                        isDragging = true
+                    if (!isDraggingSidebar && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        isDraggingSidebar = true
                     }
 
-                    if (isDragging) {
-                        params.x = dragStartParamX + dx.toInt()
-                        params.y = dragStartParamY + dy.toInt()
-                        // 拖动时允许超出屏幕一点，松手后再拉回来（见 ACTION_UP）
-                        safeUpdateLayout(params)
+                    if (isDraggingSidebar) {
+                        params.x = sidebarDragStartParamX + dx.toInt()
+                        params.y = sidebarDragStartParamY + dy.toInt()
+                        safeUpdateLayout(root, params)
                         true
                     } else {
                         false
@@ -346,16 +352,18 @@ class FloatingWindowService : Service() {
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (isDragging) {
-                        clampIntoScreen(params)
-                        safeUpdateLayout(params)
-                        saveSidebarPosition(params)
-                        isDragging = false
+                    if (isDraggingSidebar) {
+                        clampSidebarIntoScreen(params)
+                        safeUpdateLayout(root, params)
+                        AppPreferences.saveSidebarPosition(
+                            this,
+                            SidebarPosition(pxToDp(params.x), pxToDp(params.y))
+                        )
+                        isDraggingSidebar = false
                         true
                     } else {
-                        // 这次算一次"点击"（手指基本没移动）。按无障碍规范，
-                        // 使用 OnTouchListener 时必须补一次 performClick()，
-                        // 否则使用 TalkBack 等辅助功能的用户无法触发该控件的点击。
+                        // 按无障碍规范，用了 OnTouchListener 就要在判定为点击时补一次 performClick()，
+                        // 否则 TalkBack 等辅助功能无法触发该控件的点击。
                         root.performClick()
                         false
                     }
@@ -366,119 +374,242 @@ class FloatingWindowService : Service() {
         }
     }
 
-    /** 把窗口限制在屏幕可见范围内，避免用户把侧边栏拖到看不见的地方。 */
-    private fun clampIntoScreen(params: WindowManager.LayoutParams) {
+    private fun clampSidebarIntoScreen(params: WindowManager.LayoutParams) {
         val view = sidebarView ?: return
-        val screenWidth = resources.displayMetrics.widthPixels
-        val screenHeight = resources.displayMetrics.heightPixels
-        val viewWidth = view.width.takeIf { it > 0 } ?: view.measuredWidth
-        val viewHeight = view.height.takeIf { it > 0 } ?: view.measuredHeight
+        val bounds = usableBounds()
+        val width = view.width.takeIf { it > 0 } ?: view.measuredWidth
+        val height = view.height.takeIf { it > 0 } ?: view.measuredHeight
 
-        params.x = params.x.coerceIn(0, (screenWidth - viewWidth).coerceAtLeast(0))
-        params.y = params.y.coerceIn(0, (screenHeight - viewHeight).coerceAtLeast(0))
+        params.x = params.x.coerceIn(bounds.left, (bounds.right - width).coerceAtLeast(bounds.left))
+        params.y = params.y.coerceIn(bounds.top, (bounds.bottom - height).coerceAtLeast(bounds.top))
     }
 
-    private fun safeUpdateLayout(params: WindowManager.LayoutParams) {
-        val view = sidebarView ?: return
+    // ==================== 圆形位置指示器 ====================
+
+    private fun showIndicator() {
+        if (indicatorRootView != null) return
+        if (!OverlayPermission.isGranted(this)) return
+
+        val root = LayoutInflater.from(this)
+            .inflate(R.layout.overlay_position_indicator, FrameLayout(this), false)
+
+        val params = WindowManager.LayoutParams(
+            dpToPx(INDICATOR_SIZE_DP),          // 固定宽度：与布局保持一致
+            dpToPx(INDICATOR_WINDOW_HEIGHT_DP), // 固定高度
+            resolveWindowType(),
+            baseWindowFlags,                    // 注意：不加 FLAG_LAYOUT_NO_LIMITS，理由见类注释
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            // 有记录就用记录的位置，否则放在屏幕中央附近。
+            val bounds = usableBounds()
+            val saved = AppPreferences.loadIndicatorPosition(this@FloatingWindowService)
+            if (saved != null) {
+                x = dpToPx(saved.xDp)
+                y = dpToPx(saved.yDp)
+            } else {
+                x = bounds.centerX() - dpToPx(INDICATOR_SIZE_DP) / 2
+                y = bounds.centerY() - dpToPx(INDICATOR_SIZE_DP) / 2
+            }
+        }
+
         try {
-            windowManager.updateViewLayout(view, params)
+            windowManager.addView(root, params)
         } catch (e: Exception) {
-            // 窗口可能已经被系统移除（比如权限被撤销），忽略即可，不要崩溃。
+            return   // 加不上就算了，不要崩溃
+        }
+
+        indicatorRootView = root
+        indicatorParams = params
+        indicatorView = root.findViewById(R.id.touch_indicator)
+        indicatorLabelView = root.findViewById(R.id.text_indicator_coords)
+
+        setupIndicatorDrag(root)
+        clampIndicatorIntoScreen(params)
+        safeUpdateLayout(root, params)
+
+        // 记录初始位置，并让 App 的其他部分知道"位置已经变了"。
+        reportIndicatorCenter()
+    }
+
+    /**
+     * 拖动指示器。
+     *
+     * 和侧边栏不同，指示器窗口里没有任何可点击的子 View，
+     * 所以这里可以放心地在 ACTION_DOWN 就返回 true 并独占整个手势。
+     *
+     * 拖动过程中就实时把坐标写进全局状态，侧边栏上的坐标会跟着跳，
+     * 用户能一边拖一边看数值。松手时再持久化到 SharedPreferences。
+     */
+    private fun setupIndicatorDrag(root: View) {
+        root.setOnTouchListener { _, event ->
+            val params = indicatorParams ?: return@setOnTouchListener false
+            val myRoot = indicatorRootView ?: return@setOnTouchListener false
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    indicatorDragStartRawX = event.rawX
+                    indicatorDragStartRawY = event.rawY
+                    indicatorDragStartParamX = params.x
+                    indicatorDragStartParamY = params.y
+                    true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    params.x = indicatorDragStartParamX + (event.rawX - indicatorDragStartRawX).toInt()
+                    params.y = indicatorDragStartParamY + (event.rawY - indicatorDragStartRawY).toInt()
+                    safeUpdateLayout(myRoot, params)
+                    reportIndicatorCenter()
+                    true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    clampIndicatorIntoScreen(params)
+                    safeUpdateLayout(myRoot, params)
+                    reportIndicatorCenter()
+                    AppPreferences.saveIndicatorPosition(
+                        this,
+                        SidebarPosition(pxToDp(params.x), pxToDp(params.y))
+                    )
+                    root.performClick()   // 无障碍规范要求
+                    true
+                }
+
+                else -> false
+            }
         }
     }
 
-    private fun saveSidebarPosition(params: WindowManager.LayoutParams) {
-        AppPreferences.saveSidebarPosition(
-            this,
-            SidebarPosition(xDp = pxToDp(params.x), yDp = pxToDp(params.y))
-        )
+    /**
+     * 把"圆心在屏幕上的绝对坐标"写进全局状态，并刷新指示器下方的坐标文字。
+     * 这个坐标就是 Phase 5 要交给 dispatchGesture() 的那个点。
+     */
+    private fun reportIndicatorCenter() {
+        val params = indicatorParams ?: return
+        val size = dpToPx(INDICATOR_SIZE_DP)
+        val centerX = params.x + size / 2
+        val centerY = params.y + size / 2
+
+        LongPressStateHolder.setTargetPosition(centerX, centerY)
+        indicatorLabelView?.text = getString(R.string.indicator_coords, centerX, centerY)
+    }
+
+    private fun clampIndicatorIntoScreen(params: WindowManager.LayoutParams) {
+        val bounds = usableBounds()
+        val size = dpToPx(INDICATOR_SIZE_DP)
+        val windowHeight = dpToPx(INDICATOR_WINDOW_HEIGHT_DP)
+
+        params.x = params.x.coerceIn(bounds.left, (bounds.right - size).coerceAtLeast(bounds.left))
+        params.y = params.y.coerceIn(bounds.top, (bounds.bottom - windowHeight).coerceAtLeast(bounds.top))
+    }
+
+    private fun hideIndicator() {
+        val root = indicatorRootView ?: return
+
+        // 隐藏前把最后的坐标存下来，下次打开还在原处。
+        indicatorParams?.let {
+            AppPreferences.saveIndicatorPosition(
+                this,
+                SidebarPosition(pxToDp(it.x), pxToDp(it.y))
+            )
+        }
+
+        try {
+            windowManager.removeView(root)
+        } catch (e: Exception) {
+            // 视图可能已经被系统移除，忽略。
+        }
+
+        indicatorRootView = null
+        indicatorView = null
+        indicatorLabelView = null
+        indicatorParams = null
     }
 
     // ==================== 状态订阅与界面刷新 ====================
 
     /**
-     * 订阅全局状态，任何地方改了状态，侧边栏立刻跟着变。
-     * 这样"状态显示"永远和真实状态一致，不需要谁去手动同步。
+     * 订阅全局状态。任何地方改了状态，两个悬浮窗立刻跟着变，
+     * 不需要谁去手动同步，也就不可能出现"显示的状态和真实状态不一致"。
      */
     private fun observeState() {
+        var indicatorVisible = false
+
         serviceScope.launch {
             LongPressStateHolder.state.collectLatest { state ->
-                // 用户可能在"选择位置"过程中把位置定下来了，这里据此切换按钮文案。
-                val phase = when {
-                    state.isPressing -> LongPressPhase.PRESSING
-                    state.isSelectingPosition -> LongPressPhase.SELECTING_POSITION
-                    state.hasSelectedPosition -> LongPressPhase.POSITION_SELECTED
-                    else -> LongPressPhase.NO_POSITION
+                renderSidebar(state)
+
+                // 指示器只在"选择位置"和"长按中"出现：
+                // 选择时要能拖，长按时要能看到视觉状态变化（需求第八节）。
+                val shouldShow = state.isSelectingPosition || state.isPressing
+                if (shouldShow && !indicatorVisible) {
+                    showIndicator()
+                } else if (!shouldShow && indicatorVisible) {
+                    hideIndicator()
                 }
-                renderState(phase, state.hasSelectedPosition, state.targetX, state.targetY)
+                indicatorVisible = shouldShow
+
+                indicatorView?.setPressing(state.isPressing)
             }
         }
     }
 
-    private fun renderState(
-        phase: LongPressPhase,
-        hasPosition: Boolean,
-        x: Int,
-        y: Int
-    ) {
-        val context = this
+    private fun renderSidebar(state: com.example.longpresstool.model.LongPressUiState) {
+        val phase = when {
+            state.isPressing -> LongPressPhase.PRESSING
+            state.isSelectingPosition -> LongPressPhase.SELECTING_POSITION
+            state.hasSelectedPosition -> LongPressPhase.POSITION_SELECTED
+            else -> LongPressPhase.NO_POSITION
+        }
 
         // ---- 状态文字 ----
-        val statusText = when (phase) {
-            LongPressPhase.PRESSING ->
-                getString(R.string.overlay_status_pressing, x, y)
-            LongPressPhase.NO_POSITION ->
-                getString(R.string.overlay_status_not_selected)
-            else ->
-                getString(R.string.overlay_status_selected, x, y)
+        statusTextView?.text = when (phase) {
+            LongPressPhase.PRESSING -> getString(R.string.overlay_status_pressing, state.targetX, state.targetY)
+            LongPressPhase.NO_POSITION -> getString(R.string.overlay_status_not_selected)
+            LongPressPhase.SELECTING_POSITION -> getString(R.string.overlay_status_selecting)
+            LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_status_selected, state.targetX, state.targetY)
         }
-        statusTextView?.text = statusText
 
         // ---- 状态指示灯颜色 ----
         val dotColorRes = when (phase) {
             LongPressPhase.PRESSING -> R.color.status_pressing
+            LongPressPhase.SELECTING_POSITION -> R.color.status_selecting
             LongPressPhase.NO_POSITION -> R.color.status_idle
-            else -> R.color.status_ready
+            LongPressPhase.POSITION_SELECTED -> R.color.status_ready
         }
         statusDotView?.backgroundTintList =
-            ColorStateList.valueOf(ContextCompat.getColor(context, dotColorRes))
+            ColorStateList.valueOf(ContextCompat.getColor(this, dotColorRes))
 
         // ---- 提示文字 ----
         hintTextView?.text = when (phase) {
-            LongPressPhase.PRESSING ->
-                getString(R.string.overlay_hint_pressing)
-            LongPressPhase.POSITION_SELECTED ->
-                getString(R.string.overlay_hint_ready)
-            else ->
-                getString(R.string.overlay_hint_choose_position)
+            LongPressPhase.PRESSING -> getString(R.string.overlay_hint_pressing)
+            LongPressPhase.SELECTING_POSITION -> getString(R.string.overlay_hint_selecting)
+            LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_hint_ready)
+            LongPressPhase.NO_POSITION -> getString(R.string.overlay_hint_choose_position)
         }
 
-        // 只有正在长按时才显示"60 秒分段"的限制说明，平时不打扰用户。
-        limitTextView?.visibility =
-            if (phase == LongPressPhase.PRESSING) View.VISIBLE else View.GONE
+        // 只在长按时显示"60 秒分段"的限制说明，平时不打扰用户。
+        limitTextView?.visibility = if (phase == LongPressPhase.PRESSING) View.VISIBLE else View.GONE
 
-        // ---- 按钮文案与可用性 ----
-        selectPositionButton?.text = if (phase == LongPressPhase.SELECTING_POSITION) {
-            getString(R.string.action_finish_selecting)
-        } else {
-            getString(R.string.action_select_position)
-        }
+        // ---- 按钮 ----
+        selectPositionButton?.text =
+            if (phase == LongPressPhase.SELECTING_POSITION) getString(R.string.action_finish_selecting)
+            else getString(R.string.action_select_position)
 
-        // 长按过程中不允许再改位置，避免指示器和实际按下的点不一致。
+        // 长按过程中不允许改位置，避免指示器和实际按下的点不一致。
         selectPositionButton?.isEnabled = phase != LongPressPhase.PRESSING
-        startButton?.isEnabled = hasPosition && phase != LongPressPhase.PRESSING
+        startButton?.isEnabled = state.hasSelectedPosition && phase != LongPressPhase.PRESSING
         stopButton?.isEnabled = phase == LongPressPhase.PRESSING
     }
 
-    // ==================== 关闭 ====================
+    // ==================== 关闭与生命周期 ====================
 
     /**
-     * 关闭侧边栏并结束 Service。
-     *
-     * 顺序很重要：先移除视图，再 stopSelf。
-     * 反过来写的话，onDestroy 里再去 removeView 容易因为窗口已被系统处理而抛异常。
+     * 关闭所有悬浮窗并结束 Service。
+     * 顺序很重要：先移除视图再 stopSelf，否则 onDestroy 里再 removeView 容易抛异常。
      */
-    private fun closeSidebar() {
+    private fun closeEverything() {
+        hideIndicator()
         removeSidebar()
         stopSelf()
     }
@@ -488,10 +619,10 @@ class FloatingWindowService : Service() {
         try {
             windowManager.removeView(view)
         } catch (e: Exception) {
-            // 视图可能已经被系统移除，忽略。
+            // 视图可能已被系统移除，忽略。
         }
         sidebarView = null
-        layoutParams = null
+        sidebarParams = null
 
         // 清空引用，避免持有已销毁的 View 造成内存泄漏。
         statusDotView = null
@@ -506,10 +637,11 @@ class FloatingWindowService : Service() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        hideIndicator()
         removeSidebar()
 
-        // 复位全局状态：侧边栏没了，就不该再显示"运行中"。
-        // 注意 resetRunningState() 会保留已选位置（需求要求停止/关闭后保留位置）。
+        // 复位"运行中"相关的状态，但**保留已选位置**：
+        // 需求第九节明确要求停止/关闭后保留用户之前选的位置。
         LongPressStateHolder.resetRunningState()
 
         isRunning = false
@@ -517,31 +649,111 @@ class FloatingWindowService : Service() {
     }
 
     /**
-     * 屏幕旋转 / 尺寸变化时系统会回调这里。
+     * 屏幕旋转 / 尺寸变化时系统回调这里。
      *
-     * 这里**不重建**侧边栏，只做两件事：
-     * 1. 把窗口重新夹回新的屏幕范围内（横屏变窄后，原来贴右边的侧边栏可能跑到屏幕外）；
-     * 2. 位置以 dp 保存，所以竖屏时看起来仍在相近的相对位置。
+     * 这里不重建悬浮窗，只把两个窗口重新夹回新的可用区域内
+     * （横屏变窄后，原来贴右边的窗口可能跑到屏幕外），并把新位置按 dp 存下来。
      *
-     * 同时在 AndroidManifest 里给 Service 声明了 configChanges，
-     * 让系统在旋转时不要重建 Service，避免侧边栏闪一下。
+     * AndroidManifest 里给这个 Service 声明了 configChanges，
+     * 让系统在旋转时不要重建 Service，避免悬浮窗闪一下。
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val params = layoutParams ?: return
-        clampIntoScreen(params)
-        safeUpdateLayout(params)
-        saveSidebarPosition(params)
+
+        sidebarParams?.let {
+            clampSidebarIntoScreen(it)
+            sidebarView?.let { view -> safeUpdateLayout(view, it) }
+            AppPreferences.saveSidebarPosition(this, SidebarPosition(pxToDp(it.x), pxToDp(it.y)))
+        }
+
+        indicatorParams?.let {
+            clampIndicatorIntoScreen(it)
+            indicatorRootView?.let { view -> safeUpdateLayout(view, it) }
+            reportIndicatorCenter()
+        }
     }
 
-    // ==================== 小工具 ====================
+    // ==================== 坐标与尺寸工具 ====================
 
-    private fun dpToPx(dp: Int): Int =
-        TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            dp.toFloat(),
-            resources.displayMetrics
-        ).toInt()
+    /**
+     * 当前可以安全放置悬浮窗的屏幕区域（屏幕绝对坐标）。
+     *
+     * 需求第六节要求处理状态栏、导航栏、刘海屏。做法是：
+     * 1. 起点用**真实屏幕尺寸**（包含状态栏、刘海、导航栏），
+     *    而不是 resources.displayMetrics —— 后者在部分版本/机型上不包含系统栏，
+     *    会算出一个比真实屏幕小的坐标系，导致坐标偏上或偏左；
+     * 2. 再用当前窗口的 insets 把状态栏、刘海、导航栏所在的安全区减掉，
+     *    保证用户不会把指示器拖到挖孔下面或导航栏里。
+     *
+     * 注意 API 30 是分界线：
+     * - 30+：WindowMetrics + WindowInsets.getInsets()，官方推荐方式；
+     * - 24~29：只能用已废弃的 Display.getRealSize() 和 insets 的 left/top/right/bottom 字段。
+     *   这里做版本判断，两个分支都保留，就是需求里说的"对关键 API 进行版本判断"。
+     */
+    private fun usableBounds(): Rect {
+        val fullScreen = Rect()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.maximumWindowMetrics.bounds
+            fullScreen.set(0, 0, bounds.width(), bounds.height())
+        } else {
+            // API 24~29：只能用已废弃的 getRealSize()。它给出的是真实屏幕尺寸，
+            // 包含状态栏和导航栏区域，正是我们要的坐标系。
+            @Suppress("DEPRECATION")
+            val size = android.graphics.Point().also { windowManager.defaultDisplay.getRealSize(it) }
+            fullScreen.set(0, 0, size.x, size.y)
+        }
+
+        // 取某个悬浮窗当前生效的 insets，用来扣掉系统栏和刘海区域。
+        val insets = currentWindowInsets() ?: return fullScreen
+
+        return Rect(
+            fullScreen.left + insets.left,
+            fullScreen.top + insets.top,
+            fullScreen.right - insets.right,
+            fullScreen.bottom - insets.bottom
+        )
+    }
+
+    private fun currentWindowInsets(): Rect? {
+        val view = sidebarView ?: indicatorRootView ?: return null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val insets = view.rootWindowInsets ?: return null
+            val systemBars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            Rect(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+        } else {
+            val insets = ViewCompat.getRootWindowInsets(view) ?: return null
+            val systemBars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            Rect(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+        }
+    }
+
+    /**
+     * 监听 insets 变化：状态栏/导航栏隐藏或显示（例如进入全屏的其他 App 后返回）时，
+     * 重新把悬浮窗夹回可见区域，避免它被系统栏压住。
+     */
+    private fun observeInsetsChanges(view: View) {
+        ViewCompat.setOnApplyWindowInsetsListener(view, OnApplyWindowInsetsListener { _, insets ->
+            sidebarParams?.let { clampSidebarIntoScreen(it) }
+            indicatorParams?.let { clampIndicatorIntoScreen(it) }
+            insets
+        })
+    }
+
+    private fun safeUpdateLayout(view: View, params: WindowManager.LayoutParams) {
+        try {
+            windowManager.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            // 窗口可能已经被系统移除（例如权限被撤销），忽略即可，绝不崩溃。
+        }
+    }
+
+    private fun dpToPx(dp: Int): Int = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        dp.toFloat(),
+        resources.displayMetrics
+    ).toInt()
 
     private fun pxToDp(px: Int): Int =
         (px / resources.displayMetrics.density).toInt()
@@ -550,11 +762,15 @@ class FloatingWindowService : Service() {
         private const val CHANNEL_ID = "long_press_tool_overlay"
         private const val NOTIFICATION_ID = 1001
 
+        /** 圆形指示器的直径，必须与 overlay_position_indicator.xml 里的 60dp 一致。 */
+        private const val INDICATOR_SIZE_DP = 60
+
+        /** 指示器窗口总高度 = 圆形 60dp + 下方坐标文字 36dp。 */
+        private const val INDICATOR_WINDOW_HEIGHT_DP = 96
+
         /**
          * Service 是否正在运行。
-         *
-         * 用 @Volatile 是因为它可能被不同线程读写。
-         * 用 Application 级静态变量而不是静态引用 Service 实例，避免内存泄漏。
+         * 用 @Volatile 是因为可能被不同线程读写；存静态布尔值而不是 Service 实例，避免内存泄漏。
          */
         @Volatile
         private var isRunning: Boolean = false
@@ -562,15 +778,14 @@ class FloatingWindowService : Service() {
         fun isRunning(): Boolean = isRunning
 
         /**
-         * 启动侧边栏。Activity 只需要调用这个方法，不用关心 Intent 细节。
-         *
+         * 启动悬浮界面。Activity 只需调用这个方法，不用关心 Intent 细节。
          * 已经运行时直接返回，防止重复添加窗口（重复添加会抛 BadTokenException）。
          */
         fun start(context: Context) {
             if (isRunning) return
             val intent = Intent(context, FloatingWindowService::class.java)
-            // minSdk = 24，而 startForegroundService 从 API 26 才有；
-            // 24/25 上系统对后台 Service 的限制宽松一些，用 startService 即可。
+            // minSdk = 24；startForegroundService 从 API 26 才有，
+            // 24/25 上后台 Service 限制较宽松，用 startService 即可。
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -578,7 +793,7 @@ class FloatingWindowService : Service() {
             }
         }
 
-        /** 请求关闭侧边栏（触发 closeSidebar -> stopSelf）。 */
+        /** 请求关闭悬浮界面。 */
         fun stop(context: Context) {
             context.stopService(Intent(context, FloatingWindowService::class.java))
         }

@@ -5,6 +5,20 @@
       灰 = 还没选位置，绿 = 位置已就绪，红 = 正在长按。
     -->
     <color name="status_idle">#FF9E9E9E</color>
+    <color name="status_selecting">#FFF9A825</color>
     <color name="status_ready">#FF2E7D32</color>
     <color name="status_pressing">#FFD32F2F</color>
+
+    <!--
+      圆形位置指示器的配色。
+      未运行时是"安静"的半透明白 + 灰边；长按中变成醒目的红 + 白十字。
+    -->
+    <color name="indicator_idle_fill">#66FFFFFF</color>
+    <color name="indicator_idle_stroke">#B3000000</color>
+    <color name="indicator_pressing_fill">#66D32F2F</color>
+    <color name="indicator_pressing_stroke">#FFD32F2F</color>
+
+    <!-- 指示器下方坐标文字的底色与文字色 -->
+    <color name="indicator_label_background">#CC000000</color>
+    <color name="indicator_label_text">#FFFFFFFF</color>
 </resources>

@@ -26,13 +26,18 @@
     <string name="action_stop_long_press">停止</string>
 
     <string name="overlay_status_not_selected">未选择位置</string>
+    <string name="overlay_status_selecting">正在选择位置</string>
     <string name="overlay_status_selected">已选择位置（%1$d, %2$d）</string>
     <string name="overlay_status_pressing">长按中（%1$d, %2$d）</string>
 
     <string name="overlay_hint_choose_position">请点击「选择位置」，把圆形指示器拖到需要长按的地方。</string>
+    <string name="overlay_hint_selecting">拖动圆形指示器到目标位置，对准后点「完成选择」。</string>
     <string name="overlay_hint_ready">位置已确定。点击「启动」执行长按。</string>
     <string name="overlay_hint_pressing">正在按住该位置。点击「停止」即可结束长按。</string>
     <string name="overlay_hint_max_duration">注意：Android 系统限制单次手势最长 60 秒，本应用会自动分段续接以持续按住。</string>
+
+    <!-- 圆形指示器下方显示的实时坐标 -->
+    <string name="indicator_coords">%1$d, %2$d</string>
 
     <!-- ===== 通知（前台 Service 必需） ===== -->
     <string name="notification_channel_name">长按器运行状态</string>
