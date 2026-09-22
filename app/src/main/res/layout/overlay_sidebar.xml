@@ -19,13 +19,21 @@
   ===== 为什么用 XML 而不是 Compose？=====
   悬浮窗不属于任何 Activity，要在里面用 Compose 得额外搭 ComposeView + LifecycleOwner
   + SavedStateRegistryOwner 三件套。这个侧边栏只是几个按钮，用 XML 更直接、更好调试。
+
+  关于最外层这个 FrameLayout：
+  它只用来承载圆角背景和内边距，里面那个 LinearLayout 负责排版，
+  两者尺寸都是 wrap_content，确实可以合并成一个（lint 会提示 UselessParent）。
+  这里保留分层是为了让"背景/内边距"和"内容排版"各管一件事，
+  改动背景样式时不会牵动内容布局，可读性更好。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/sidebar_root"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
     android:background="@drawable/overlay_card_background"
-    android:padding="12dp">
+    android:padding="12dp"
+    tools:ignore="UselessParent">
 
     <LinearLayout
         android:layout_width="216dp"

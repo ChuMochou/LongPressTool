@@ -14,13 +14,11 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import android.util.TypedValue
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
@@ -30,7 +28,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.OnApplyWindowInsetsListener
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import com.example.longpresstool.BuildConfig
 import com.example.longpresstool.MainActivity
 import com.example.longpresstool.R
@@ -40,7 +37,6 @@ import com.example.longpresstool.model.SidebarPosition
 import com.example.longpresstool.permission.AccessibilityPermission
 import com.example.longpresstool.permission.AppPreferences
 import com.example.longpresstool.permission.OverlayPermission
-import com.example.longpresstool.service.LongPressAccessibilityService
 import com.example.longpresstool.ui.widget.StatusDotView
 import com.example.longpresstool.ui.widget.TouchIndicatorView
 import kotlinx.coroutines.CoroutineScope
@@ -89,6 +85,9 @@ class FloatingWindowService : Service() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var notificationManager: NotificationManager
+
+    /** 屏幕几何计算（dp/px 换算、可用区域、边界夹取）。详见 [ScreenGeometry]。 */
+    private val screenGeometry: ScreenGeometry by lazy { ScreenGeometry(this) }
 
     /** 侧边栏的根视图与窗口参数。 */
     private var sidebarView: View? = null
@@ -936,62 +935,8 @@ class FloatingWindowService : Service() {
     // ==================== 坐标与尺寸工具 ====================
 
     /**
-     * 当前可以安全放置悬浮窗的屏幕区域（屏幕绝对坐标）。
-     *
-     * 需求第六节要求处理状态栏、导航栏、刘海屏。做法是：
-     * 1. 起点用**真实屏幕尺寸**（包含状态栏、刘海、导航栏），
-     *    而不是 resources.displayMetrics —— 后者在部分版本/机型上不包含系统栏，
-     *    会算出一个比真实屏幕小的坐标系，导致坐标偏上或偏左；
-     * 2. 再用当前窗口的 insets 把状态栏、刘海、导航栏所在的安全区减掉，
-     *    保证用户不会把指示器拖到挖孔下面或导航栏里。
-     *
-     * 注意 API 30 是分界线：
-     * - 30+：WindowMetrics + WindowInsets.getInsets()，官方推荐方式；
-     * - 24~29：只能用已废弃的 Display.getRealSize() 和 insets 的 left/top/right/bottom 字段。
-     *   这里做版本判断，两个分支都保留，就是需求里说的"对关键 API 进行版本判断"。
-     */
-    private fun usableBounds(): Rect {
-        val fullScreen = Rect()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = windowManager.maximumWindowMetrics.bounds
-            fullScreen.set(0, 0, bounds.width(), bounds.height())
-        } else {
-            // API 24~29：只能用已废弃的 getRealSize()。它给出的是真实屏幕尺寸，
-            // 包含状态栏和导航栏区域，正是我们要的坐标系。
-            @Suppress("DEPRECATION")
-            val size = android.graphics.Point().also { windowManager.defaultDisplay.getRealSize(it) }
-            fullScreen.set(0, 0, size.x, size.y)
-        }
-
-        // 取某个悬浮窗当前生效的 insets，用来扣掉系统栏和刘海区域。
-        val insets = currentWindowInsets() ?: return fullScreen
-
-        return Rect(
-            fullScreen.left + insets.left,
-            fullScreen.top + insets.top,
-            fullScreen.right - insets.right,
-            fullScreen.bottom - insets.bottom
-        )
-    }
-
-    private fun currentWindowInsets(): Rect? {
-        val view = sidebarView ?: indicatorRootView ?: return null
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val insets = view.rootWindowInsets ?: return null
-            val systemBars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            Rect(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-        } else {
-            val insets = ViewCompat.getRootWindowInsets(view) ?: return null
-            val systemBars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-            )
-            Rect(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-        }
-    }
-
-    /**
-     * 监听 insets 变化：状态栏/导航栏隐藏或显示（例如进入全屏的其他 App 后返回）时，
-     * 重新把悬浮窗夹回可见区域，避免它被系统栏压住。
+     * 监听 insets 变化：状态栏/导航栏隐藏或显示（例如进入全屏的其他 App 后再返回）时，
+     * 重新把两个悬浮窗夹回可见区域，避免它们被系统栏压住或跑到屏幕外。
      */
     private fun observeInsetsChanges(view: View) {
         ViewCompat.setOnApplyWindowInsetsListener(view, OnApplyWindowInsetsListener { _, insets ->
@@ -1009,14 +954,13 @@ class FloatingWindowService : Service() {
         }
     }
 
-    private fun dpToPx(dp: Int): Int = TypedValue.applyDimension(
-        TypedValue.COMPLEX_UNIT_DIP,
-        dp.toFloat(),
-        resources.displayMetrics
-    ).toInt()
+    private fun dpToPx(dp: Int): Int = screenGeometry.dpToPx(dp)
 
-    private fun pxToDp(px: Int): Int =
-        (px / resources.displayMetrics.density).toInt()
+    private fun pxToDp(px: Int): Int = screenGeometry.pxToDp(px)
+
+    /** 可用区域。insets 从已添加的窗口里取，两个都没有时退化为整块屏幕。 */
+    private fun usableBounds(): Rect =
+        screenGeometry.usableBounds(sidebarView ?: indicatorRootView)
 
     companion object {
         private const val TAG = "FloatingWindowService"

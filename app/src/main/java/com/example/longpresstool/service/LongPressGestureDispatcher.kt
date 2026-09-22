@@ -83,9 +83,6 @@ class LongPressGestureDispatcher(
     /** 已经接力的次数，仅用于日志排查。 */
     private var relayCount = 0
 
-    val isHolding: Boolean
-        get() = holding
-
     /**
      * 开始长按。
      *
@@ -122,19 +119,11 @@ class LongPressGestureDispatcher(
     @RequiresApi(Build.VERSION_CODES.O)
     private fun dispatchHoldGroup() {
         val gesture = buildHoldGroup()
-        if (gesture == null) {
-            finishHold()
-            return
-        }
-
         val accepted = accessibilityService.dispatchGesture(gesture, gestureResultCallback, null)
-        val last = gesture.getStroke(gesture.strokeCount - 1)
 
         Log.d(
             TAG,
-            "dispatch accepted=$accepted strokes=${gesture.strokeCount} " +
-                "groupEndTime=${last.startTime + last.duration}ms " +
-                "lastWillContinue=${last.willContinue()} relay=$relayCount"
+            "dispatch accepted=$accepted duration=${HOLD_STROKE_MS}ms relay=$relayCount"
         )
 
         if (!accepted) {
@@ -144,73 +133,35 @@ class LongPressGestureDispatcher(
     }
 
     /**
-     * 构造一组手势。
+     * 构造一次"按住"手势。
      *
-     * ===== willContinue 到底怎么用（本项目最容易搞错的地方）=====
+     * ===== 为什么是"一笔 58 秒"，而不是把多段排进一个手势 =====
      *
-     * 官方源码的规则很严格：
-     *   1. **只有 willContinue = true 的笔画才能被 continueStroke 续接**
-     *      （否则抛 "Only strokes marked willContinue can be continued"）；
-     *   2. willContinue = true 表示"这一笔结束时**指针不抬起**，等待后续笔画接上"。
+     * 试过"一个手势里排多段（每段 5 秒）"来减少接力次数，实测行不通，原因有两条：
+     *   1. 组内串接必须用 continueStroke，而它要求上一笔 willContinue = true；
+     *      但实测 **willContinue = true 的笔画会被系统提前截断**（大约只跑一半时长）。
+     *      于是每段实际只按 1~2 秒，反而要不停接力，而每次接力又必然打断当前手势。
+     *   2. continueStroke 的 startTime 是"相对**本次手势起点**的绝对时间"，
+     *      而手势总时长取的是所有笔画 endTime 的最大值——
+     *      若每段 startTime 都写 0，它们会全部重叠，整个手势只有一段那么长。
      *
-     * 所以组内**每一段都必须是 true**，包括最后一段——因为最后一笔要交给**下一组**接力。
-     * 手势真正"结束并抬起指针"是由一支 willContinue = false 的笔画触发的，
-     * 而那支笔画只在用户点"停止"时才派发（见 stopHold）。
+     * 所以最终采用最朴素的形态：**一次手势就一笔，willContinue = false**，
+     * 让它被完整执行。实测 58000ms 能跑满 58014 / 58081 / 58007ms，
+     * 也就是"一次连续按压接近 1 分钟"，这是系统 60 秒上限内能做到的最长连续按压。
      *
-     *   段1(true) 段2(true) …… 段12(true)  ---接力--->  下一组 段1(true) ……
-     *   └──── 组内靠 continueStroke 串起来，指针全程一直按着 ────┘
-     *
-     * ===== 关于"一组跑不满 60 秒" =====
-     *
-     * 实测：一支标了 willContinue = true 的笔画大约只能跑到**一半时长**就被系统判定结束
-     * （所以一组 12 × 5 秒大约 2.5 秒就回调 onCompleted）。
-     * 这**不影响正确性**——回调里立刻派发下一组、且指针不抬起，
-     * 目标应用看到的仍然是一次连续的按下；代价只是接力频率变高（约每 2~3 秒一次）。
-     *
-     * ===== startTime 必须依次累加 =====
-     *
-     * continueStroke 的 startTime 是"相对**本次手势起点**的绝对时间"，
-     * 而 GestureDescription.getTotalDuration() 取所有笔画 endTime 的最大值。
-     * 若每段都写 0，它们会全部重叠在 [0, 5000ms] 内，整个手势就只有 5 秒——
-     * 表面"排了 12 段"，实际只按了 5 秒。这个坑我踩过。
+     * 这一笔自然结束后，onCompleted 里立刻再派发下一笔（见 gestureResultCallback），
+     * 实测两次之间只隔约 65ms，用户察觉不到。
      */
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun buildHoldGroup(): GestureDescription? {
-        val builder = GestureDescription.Builder()
-
-        val totalStrokes = CHUNKS_PER_GROUP
-
-        // 从 0ms 开始按下。
-        // 当前配置（组内只有一段）用 willContinue = false，让这一笔被**完整执行**：
-        // 实测 58000ms 的笔画能跑满 58014 / 58081 / 58007ms，
-        // 于是"一次连续按压"接近 1 分钟，这是系统 60 秒上限内能做到的最长连续按压。
-        var previous = GestureDescription.StrokeDescription(
+    private fun buildHoldGroup(): GestureDescription {
+        val stroke = GestureDescription.StrokeDescription(
             holdPath(targetX, targetY),
-            0L,
-            CHUNK_MS,
-            totalStrokes > 1   // 只有组内多段时才需要 true 供续接
+            0L,                 // 手势开始后立即按下
+            HOLD_STROKE_MS,     // 按住 58 秒
+            false               // 不接力：让这一笔完整跑完
         )
-        builder.addStroke(previous)
-
-        // Builder 没有 strokeCount 属性，所以自己数。
-        var strokeCount = 1
-        var nextStartTime = CHUNK_MS
-        while (strokeCount < totalStrokes) {
-            val isLast = strokeCount == totalStrokes - 1
-            val next = try {
-                previous.continueStroke(holdPath(targetX, targetY), nextStartTime, CHUNK_MS, !isLast)
-            } catch (e: Exception) {
-                Log.e(TAG, "追加笔画失败", e)
-                break
-            }
-            builder.addStroke(next)
-            previous = next
-            strokeCount++
-            nextStartTime += CHUNK_MS
-        }
-
-        activeStroke = previous
-        return builder.build()
+        activeStroke = stroke
+        return GestureDescription.Builder().addStroke(stroke).build()
     }
 
     /**
@@ -367,25 +318,14 @@ class LongPressGestureDispatcher(
     companion object {
         private const val TAG = "LongPressGesture"
 
-        /** 每一段的时长。决定一次连续按压的长度，也决定停止时的响应粒度。 */
-        private const val CHUNK_MS = 58_000L
-
         /**
-         * 一组里排多少段。
+         * 一次按压的时长。
          *
-         * 取 1：也就是**一次手势只放一笔 58 秒的按压**。
-         *
-         * 为什么不排满 20 段：
-         * 实测发现，一段标了 willContinue = true 的笔画大约只能跑到一半时长就被系统结束；
-         * 而要在组内把多段串起来又必须用 willContinue = true。
-         * 结果就是"组内串接"反而让每次实际只能按 1~2 秒，需要不停接力，
-         * 而**每次接力又必然打断当前手势**。
-         *
-         * 所以最佳策略是反过来：**用一笔长引用（willContinue = false）跑满接近 60 秒**，
-         * 只在它自然结束后才接力一次。这样一次连续按压接近 1 分钟，
-         * 中断频率最低（约每分钟一次），而不是每 2 秒一次。
+         * 取 58 秒：系统对单次手势的硬上限是 60 秒（MAX_GESTURE_DURATION_MS），
+         * 留 2 秒余量避免边界问题。这是"一次连续按压"能做到的最长时长，
+         * 跑满后再接力下一笔（实测两次之间约 65ms，用户察觉不到）。
          */
-        private const val CHUNKS_PER_GROUP = 1
+        private const val HOLD_STROKE_MS = 58_000L
 
         /** 收尾笔画的时长：很短，只为让手指尽快抬起。 */
         private const val RELEASE_STROKE_MS = 50L

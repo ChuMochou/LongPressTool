@@ -1,6 +1,5 @@
 package com.example.longpresstool.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -21,22 +20,22 @@ private val LightColorScheme = lightColorScheme(
     primary = Purple40,
     secondary = PurpleGrey40,
     tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
 )
 
+/**
+ * App 的 Compose 主题。
+ *
+ * 与 XML 里的 `Theme.LongPressTool`（见 res/values/themes.xml）是两回事：
+ * - 这个 [LongPressToolTheme] 只作用于 **Compose 界面**（首页）；
+ * - XML 主题作用于窗口本身和传统 View（悬浮窗用的是传统 View）。
+ * 两边都基于 Material 3，所以观感一致。
+ *
+ * [dynamicColor] 打开时，Android 12+ 会取用系统壁纸提取的配色（Material You），
+ * 这是官方的推荐做法；低版本自动回退到内置配色。
+ */
 @Composable
 fun LongPressToolTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {

@@ -15,6 +15,7 @@ import android.util.Log
 import android.view.View
 import android.view.animation.LinearInterpolator
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.withRotation
 import com.example.longpresstool.R
 
 /**
@@ -300,10 +301,11 @@ class TouchIndicatorView @JvmOverloads constructor(
                 centerX + ringRadius,
                 centerY + ringRadius
             )
-            canvas.save()
-            canvas.rotate(ringRotation, centerX, centerY)
-            canvas.drawArc(ringBounds, 0f, 360f, false, ringPaint)
-            canvas.restore()
+            // withRotation 是 core-ktx 的扩展：内部就是 save / rotate / restore，
+            // 但不用手动配对，写错漏掉 restore 的风险更低。
+            canvas.withRotation(ringRotation, centerX, centerY) {
+                drawArc(ringBounds, 0f, 360f, false, ringPaint)
+            }
         }
     }
 
