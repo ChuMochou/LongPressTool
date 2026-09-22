@@ -73,12 +73,17 @@
             android:paddingHorizontal="10dp"
             android:paddingVertical="8dp">
 
-            <!-- 状态指示灯：具体颜色在代码里按状态切换 -->
-            <View
+            <!--
+              状态指示灯：由 StatusDotView 自绘。
+              为什么不用「View + shape 背景 + backgroundTint」：
+              那样只能硬切颜色，也没法在灯外围加扩散光圈。
+              自绘可以做到颜色平滑过渡 + 长按时外圈脉冲（见 StatusDotView）。
+              尺寸给到 14dp，是为了给外圈光圈留出空间。
+            -->
+            <com.example.longpresstool.ui.widget.StatusDotView
                 android:id="@+id/status_dot"
-                android:layout_width="10dp"
-                android:layout_height="10dp"
-                android:background="@drawable/status_dot" />
+                android:layout_width="14dp"
+                android:layout_height="14dp" />
 
             <TextView
                 android:id="@+id/text_status"

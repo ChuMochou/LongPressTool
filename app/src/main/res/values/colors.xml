@@ -18,6 +18,13 @@
     <color name="indicator_pressing_fill">#66D32F2F</color>
     <color name="indicator_pressing_stroke">#FFD32F2F</color>
 
+    <!--
+      长按中向外扩散的"波纹"颜色。
+      用带透明度的红，向外扩散的同时淡出，形成"能量正在释放"的感觉。
+      它与旋转虚线环一起，保证"正在长按"这个状态连静止截图都能看出来。
+    -->
+    <color name="indicator_pulse">#66D32F2F</color>
+
     <!-- 指示器下方坐标文字的底色与文字色 -->
     <color name="indicator_label_background">#CC000000</color>
     <color name="indicator_label_text">#FFFFFFFF</color>

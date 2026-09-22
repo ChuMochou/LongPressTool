@@ -1,5 +1,6 @@
 package com.example.longpresstool.ui.widget
 
+import android.animation.ArgbEvaluator
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
@@ -8,6 +9,7 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.RectF
+import android.provider.Settings
 import android.util.AttributeSet
 import android.util.Log
 import android.view.View
@@ -16,23 +18,35 @@ import androidx.core.content.ContextCompat
 import com.example.longpresstool.R
 
 /**
- * 长按位置指示器：一个圆形 + 十字准星。
+ * 长按位置指示器：一个圆形 + 十字准星（Phase 6：三态动画）。
  *
- * 为什么不用 XML drawable 拼：
- * 十字准星要"对准圆心"，用 Canvas 直接画最直观，也方便做动画。
+ * ===== 为什么不用 XML drawable 拼 =====
+ * 十字准星要"对准圆心"，而且状态之间要做**渐变过渡**（颜色插值、边框变粗），
+ * 用 Canvas 直接画最直观，也最好控制动画。
  *
- * ===== 两种视觉状态（需求第八节：必须让人一眼看出正在长按）=====
+ * ===== 三种视觉状态（对应需求第八节）=====
  *
- * 未运行（安静样式）：
- *   - 白色半透明填充 + 灰色边框 + 灰色十字准星
+ * 1. 未运行（"普通样式"）
+ *    - 白色半透明填充 + 灰色边框 + 灰色十字准星
+ *    - 加一个**很轻微**的透明度呼吸（1.0 ↔ 0.72，1.6 秒一次），
+ *      用来暗示"这个圆是可以拖动的"；幅度刻意做小，避免和"长按中"混淆。
  *
- * 长按中（刻意做得极度醒目，叠了三重效果）：
- *   1. 填充变红、边框加粗到 4dp、十字准星变白；
- *   2. 外圈多出一道**旋转的红色虚线环**——连静态截图都能一眼看出不一样；
- *   3. 整体做 0.94 ↔ 1.0 的"呼吸"缩放。
+ * 2. 正在选择位置
+ *    - 和"未运行"一样，因为这时它就是普通的可拖动目标。
+ *      （"选择中"的提示交给侧边栏的状态灯和提示文字。）
  *
- * 只靠变色是不够的：在深色或有花纹的背景上，单凭颜色差异容易看不出来，
- * 所以额外加了"旋转虚线环"这种形状层面的区别。
+ * 3. 长按中（**必须一眼看出来**，所以叠了四重效果）
+ *    - a) 填充/边框/十字颜色**平滑过渡**到红色（而不是硬切）
+ *    - b) 边框由 2dp 变粗到 5dp（同样是过渡）
+ *    - c) 外圈一圈**旋转的红色虚线环**——形状层面的差异，静止截图也能分辨
+ *    - d) 一圈向外扩散并淡出的**红色波纹**——表示"正在持续按压"
+ *
+ * 停止后：所有动画停止，样式平滑回到"未运行"。
+ *
+ * ===== 无障碍：必须尊重系统的动画设置 =====
+ * 如果用户在开发者选项里把"动画时长缩放"设为 0（或开启了"移除动画"），
+ * 那么**所有动画都不应该播放**（连续闪烁/缩放可能诱发光敏不适）。
+ * 本类通过 [animationsEnabled] 统一判断，关闭时直接呈现最终静态样子。
  */
 class TouchIndicatorView @JvmOverloads constructor(
     context: Context,
@@ -58,125 +72,188 @@ class TouchIndicatorView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
     }
 
-    /** 用于画虚线环的矩形，复用对象避免每次 onDraw 都新建。 */
+    /** 长按中向外扩散的波纹。 */
+    private val pulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+
+    /** 复用对象，避免每次 onDraw 都新建。 */
     private val ringBounds = RectF()
+    private val pulseBounds = RectF()
 
     /** 虚线环的旋转角度，由动画持续更新。 */
     private var ringRotation = 0f
 
-    /** 是否正在长按。改变它就会切换配色并启停动画。 */
+    /** 波纹的扩散进度 0f..1f。 */
+    private var pulseProgress = 0f
+
+    /** 0f = 未运行样式，1f = 长按中样式。颜色和边框宽度都按它插值。 */
+    private var pressProgress = 0f
+
+    private val argbEvaluator = ArgbEvaluator()
+
+    // 未运行样式
+    private val idleFill: Int = ContextCompat.getColor(context, R.color.indicator_idle_fill)
+    private val idleStroke: Int = ContextCompat.getColor(context, R.color.indicator_idle_stroke)
+    // 长按样式
+    private val pressingFill: Int = ContextCompat.getColor(context, R.color.indicator_pressing_fill)
+    private val pressingStroke: Int = ContextCompat.getColor(context, R.color.indicator_pressing_stroke)
+    private val pulseColor: Int = ContextCompat.getColor(context, R.color.indicator_pulse)
+
     private var isPressing = false
 
-    private var breatheAnimatorX: ObjectAnimator? = null
-    private var breatheAnimatorY: ObjectAnimator? = null
+    private var pressTransition: ValueAnimator? = null
+    private var breatheAnimator: ObjectAnimator? = null
     private var ringAnimator: ValueAnimator? = null
+    private var pulseAnimator: ValueAnimator? = null
 
     init {
-        applyIdleStyle()
+        applyStyleForProgress(0f)
+        // 未运行时也有一个很轻的透明度呼吸，提示"可以拖动"
+        startIdleBreathing()
     }
 
-    /** 切换到"长按中"/"未运行"样式，并启停动画。 */
+    /**
+     * 切换状态。true = 长按中。
+     *
+     * 注意这里是**平滑过渡**：颜色与边框宽度按 pressProgress 从 0 动画到 1（或反向），
+     * 而不是直接换值，避免状态忽然"闪"一下。
+     */
     fun setPressing(pressing: Boolean) {
         if (isPressing == pressing) return
         isPressing = pressing
+        Log.d(TAG, "setPressing($pressing) animationsEnabled=${animationsEnabled()}")
 
         if (pressing) {
-            applyPressingStyle()
-            startAnimations()
+            startIdleBreathingStop()
+            animatePressProgress(1f)
+            startPressingAnimations()
         } else {
-            stopAnimations()
-            applyIdleStyle()
+            animatePressProgress(0f)
+            stopPressingAnimations()
         }
-        invalidate()
     }
 
-    private fun applyIdleStyle() {
-        fillPaint.color = ContextCompat.getColor(context, R.color.indicator_idle_fill)
-        strokePaint.color = ContextCompat.getColor(context, R.color.indicator_idle_stroke)
-        strokePaint.strokeWidth = dpToPx(2f)
-        crosshairPaint.color = ContextCompat.getColor(context, R.color.indicator_idle_stroke)
-        crosshairPaint.strokeWidth = dpToPx(1.5f)
-        ringRotation = 0f
-        alpha = 1f
-        scaleX = 1f
-        scaleY = 1f
-    }
+    // ==================== 状态过渡 ====================
 
-    private fun applyPressingStyle() {
-        fillPaint.color = ContextCompat.getColor(context, R.color.indicator_pressing_fill)
-        strokePaint.color = ContextCompat.getColor(context, R.color.indicator_pressing_stroke)
-        strokePaint.strokeWidth = dpToPx(4f)   // 边框更粗，和静止状态一眼区分
-        crosshairPaint.color = Color.WHITE
-        crosshairPaint.strokeWidth = dpToPx(2f)
+    private fun animatePressProgress(target: Float) {
+        pressTransition?.cancel()
 
-        ringPaint.color = ContextCompat.getColor(context, R.color.indicator_pressing_stroke)
-        ringPaint.strokeWidth = dpToPx(2.5f)
-        // 虚线：实线段 + 间隔，旋转起来会明显"在动"
-        ringPaint.pathEffect = DashPathEffect(floatArrayOf(dpToPx(7f), dpToPx(5f)), 0f)
-    }
-
-    private fun startAnimations() {
-        stopAnimations()
-
-        // 动画 1：整体轻微缩放，形成"呼吸"。X / Y 必须一起动，否则圆会被拉扁。
-        breatheAnimatorX = ObjectAnimator.ofFloat(this, View.SCALE_X, 1f, BREATHE_MIN_SCALE).apply {
-            repeatCount = ObjectAnimator.INFINITE
-            repeatMode = ObjectAnimator.REVERSE
-            duration = BREATHE_DURATION_MS
-            start()
-        }
-        breatheAnimatorY = ObjectAnimator.ofFloat(this, View.SCALE_Y, 1f, BREATHE_MIN_SCALE).apply {
-            repeatCount = ObjectAnimator.INFINITE
-            repeatMode = ObjectAnimator.REVERSE
-            duration = BREATHE_DURATION_MS
-            start()
+        if (!animationsEnabled()) {
+            // 系统关闭了动画：直接呈现最终样子（这是无障碍要求，不能硬播动画）
+            pressProgress = target
+            applyStyleForProgress(target)
+            invalidate()
+            return
         }
 
-        // 动画 2：外圈虚线环匀速旋转。这是"形状层面"的变化，最容易看见。
-        ringAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = RING_ROTATION_DURATION_MS
-            repeatCount = ValueAnimator.INFINITE
+        pressTransition = ValueAnimator.ofFloat(pressProgress, target).apply {
+            duration = PRESS_TRANSITION_MS
             interpolator = LinearInterpolator()
-            addUpdateListener { animator ->
-                ringRotation = animator.animatedValue as Float
+            addUpdateListener {
+                pressProgress = it.animatedValue as Float
+                applyStyleForProgress(pressProgress)
                 invalidate()
             }
             start()
         }
-
-        // 记录真实状态，便于排查"动画没生效"：
-        // 如果 animatorScale 是 0，说明系统关掉了动画（开发者选项 → 动画时长缩放 / 移除动画），
-        // 那就不是代码的问题。
-        Log.d(
-            TAG,
-            "长按动画已启动: breathe=${breatheAnimatorX?.duration}ms ring=${ringAnimator?.duration}ms " +
-                "animatorScale=${animatorDurationScale()}"
-        )
     }
 
-    private fun stopAnimations() {
-        breatheAnimatorX?.cancel()
-        breatheAnimatorX = null
-        breatheAnimatorY?.cancel()
-        breatheAnimatorY = null
+    /** 按过渡进度 0f..1f 计算颜色与边框宽度。 */
+    private fun applyStyleForProgress(p: Float) {
+        fillPaint.color = argbEvaluator.evaluate(p, idleFill, pressingFill) as Int
+        strokePaint.color = argbEvaluator.evaluate(p, idleStroke, pressingStroke) as Int
+        // 边框从 2dp 过渡到 5dp，让"变粗"这件事也可感知
+        strokePaint.strokeWidth = dpToPx(2f + 3f * p)
+
+        // 十字准星：灰色 -> 白色
+        crosshairPaint.color = argbEvaluator.evaluate(p, idleStroke, Color.WHITE) as Int
+        crosshairPaint.strokeWidth = dpToPx(1.5f + 0.5f * p)
+
+        // 虚线环配色（环本身只在长按时才画，见 onDraw）
+        ringPaint.color = pressingStroke
+        ringPaint.strokeWidth = dpToPx(2.5f)
+        ringPaint.pathEffect = DashPathEffect(floatArrayOf(dpToPx(7f), dpToPx(5f)), 0f)
+
+        pulsePaint.color = pulseColor
+        pulsePaint.strokeWidth = dpToPx(2f)
+    }
+
+    // ==================== 未运行：轻微呼吸 ====================
+
+    private fun startIdleBreathing() {
+        if (!animationsEnabled()) return
+        breatheAnimator = ObjectAnimator.ofFloat(this, View.ALPHA, 1f, IDLE_MIN_ALPHA).apply {
+            duration = IDLE_BREATHE_MS
+            repeatCount = ObjectAnimator.INFINITE
+            repeatMode = ObjectAnimator.REVERSE
+            start()
+        }
+    }
+
+    private fun startIdleBreathingStop() {
+        breatheAnimator?.cancel()
+        breatheAnimator = null
+        alpha = 1f
+    }
+
+    // ==================== 长按中：旋转虚线环 + 扩散波纹 ====================
+
+    private fun startPressingAnimations() {
+        stopPressingAnimations()
+
+        // 旋转虚线环：匀速转动，形状层面的变化最容易被看见
+        if (animationsEnabled()) {
+            ringAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
+                duration = RING_ROTATION_MS
+                repeatCount = ValueAnimator.INFINITE
+                interpolator = LinearInterpolator()
+                addUpdateListener {
+                    ringRotation = it.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+
+            // 扩散波纹：0 -> 1 反复播放，波纹边扩散边淡出
+            pulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = PULSE_MS
+                repeatCount = ValueAnimator.INFINITE
+                interpolator = LinearInterpolator()
+                addUpdateListener {
+                    pulseProgress = it.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+        } else {
+            // 关闭动画时也要有静态差异：画一圈固定的波纹
+            ringRotation = 0f
+            pulseProgress = PULSE_STATIC_PROGRESS
+            invalidate()
+        }
+    }
+
+    private fun stopPressingAnimations() {
         ringAnimator?.cancel()
         ringAnimator = null
-    }
-
-    /** 读取系统的"动画时长缩放"，0 表示用户/系统关闭了动画。 */
-    private fun animatorDurationScale(): Float = try {
-        android.provider.Settings.Global.getFloat(
-            context.contentResolver,
-            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f
-        )
-    } catch (e: Exception) {
-        1f
+        pulseAnimator?.cancel()
+        pulseAnimator = null
+        ringRotation = 0f
+        pulseProgress = 0f
+        invalidate()
     }
 
     override fun onDetachedFromWindow() {
         // 必须停掉无限循环的动画，否则 View 销毁后动画还在跑，造成内存泄漏。
-        stopAnimations()
+        pressTransition?.cancel()
+        pressTransition = null
+        breatheAnimator?.cancel()
+        breatheAnimator = null
+        ringAnimator?.cancel()
+        ringAnimator = null
+        pulseAnimator?.cancel()
+        pulseAnimator = null
         super.onDetachedFromWindow()
     }
 
@@ -185,22 +262,36 @@ class TouchIndicatorView @JvmOverloads constructor(
 
         val centerX = width / 2f
         val centerY = height / 2f
-        // 减去边框宽度的一半，保证边框完整画在 View 内部，不会被裁掉。
         val radius = minOf(width, height) / 2f - strokePaint.strokeWidth / 2f
 
+        // ---- 长按中：先画最外层的扩散波纹（在圆下面，像涟漪）----
+        if (isPressing && pulseProgress > 0f) {
+            val maxExtra = dpToPx(14f)
+            val pulseRadius = radius + maxExtra * pulseProgress
+            // 越扩散越透明
+            pulsePaint.alpha = ((1f - pulseProgress) * PULSE_MAX_ALPHA).toInt().coerceIn(0, 255)
+            pulseBounds.set(
+                centerX - pulseRadius,
+                centerY - pulseRadius,
+                centerX + pulseRadius,
+                centerY + pulseRadius
+            )
+            canvas.drawArc(pulseBounds, 0f, 360f, false, pulsePaint)
+        }
+
+        // ---- 圆本体 ----
         canvas.drawCircle(centerX, centerY, radius, fillPaint)
         canvas.drawCircle(centerX, centerY, radius, strokePaint)
 
-        // 十字准星：正中央留一小段空白，方便精确对准长按点。
+        // ---- 十字准星（正中央留一小段空白，方便精确对准长按点）----
         val gap = radius * 0.28f
         val armLength = radius * 0.92f
-
         canvas.drawLine(centerX, centerY - gap, centerX, centerY - armLength, crosshairPaint)
         canvas.drawLine(centerX, centerY + gap, centerX, centerY + armLength, crosshairPaint)
         canvas.drawLine(centerX - gap, centerY, centerX - armLength, centerY, crosshairPaint)
         canvas.drawLine(centerX + gap, centerY, centerX + armLength, centerY, crosshairPaint)
 
-        // 长按中：在圆外侧画一圈旋转的红色虚线环。
+        // ---- 长按中：圆外侧的旋转红色虚线环 ----
         if (isPressing) {
             val ringRadius = radius + dpToPx(5f)
             ringBounds.set(
@@ -209,7 +300,6 @@ class TouchIndicatorView @JvmOverloads constructor(
                 centerX + ringRadius,
                 centerY + ringRadius
             )
-            // 旋转画布来实现"虚线在转"
             canvas.save()
             canvas.rotate(ringRotation, centerX, centerY)
             canvas.drawArc(ringBounds, 0f, 360f, false, ringPaint)
@@ -217,13 +307,47 @@ class TouchIndicatorView @JvmOverloads constructor(
         }
     }
 
+    // ==================== 工具 ====================
+
+    /**
+     * 系统是否允许播放动画。
+     *
+     * 用户在开发者选项里把"动画时长缩放"设为 0（或某些省电/无障碍场景）时，
+     * 我们不应该再播放旋转、扩散这类动画——那既无意义，也可能让部分用户不适。
+     * 读取失败时按"允许"处理（宁可动画正常，也不要因为读不到设置就完全不动）。
+     */
+    private fun animationsEnabled(): Boolean = try {
+        Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f
+        ) > 0f
+    } catch (e: Exception) {
+        true
+    }
+
     private fun dpToPx(dp: Float): Float = dp * resources.displayMetrics.density
 
     companion object {
         private const val TAG = "TouchIndicatorView"
 
-        private const val BREATHE_DURATION_MS = 700L
-        private const val BREATHE_MIN_SCALE = 0.9f
-        private const val RING_ROTATION_DURATION_MS = 2_000L
+        /** 状态切换的过渡时长。太快会显得生硬，太慢会让人以为没响应。 */
+        private const val PRESS_TRANSITION_MS = 220L
+
+        /** 未运行时透明度呼吸的周期与最低透明度（幅度刻意做小）。 */
+        private const val IDLE_BREATHE_MS = 1_600L
+        private const val IDLE_MIN_ALPHA = 0.72f
+
+        /** 旋转虚线环转一圈的时间。 */
+        private const val RING_ROTATION_MS = 1_800L
+
+        /** 扩散波纹的周期。 */
+        private const val PULSE_MS = 1_400L
+
+        /** 波纹最亮时的透明度（0..255）。 */
+        private const val PULSE_MAX_ALPHA = 150f
+
+        /** 关闭动画时波纹停在的进度，保证仍有静态可见的差异。 */
+        private const val PULSE_STATIC_PROGRESS = 0.5f
     }
 }

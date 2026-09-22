@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -42,6 +41,7 @@ import com.example.longpresstool.permission.AccessibilityPermission
 import com.example.longpresstool.permission.AppPreferences
 import com.example.longpresstool.permission.OverlayPermission
 import com.example.longpresstool.service.LongPressAccessibilityService
+import com.example.longpresstool.ui.widget.StatusDotView
 import com.example.longpresstool.ui.widget.TouchIndicatorView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,7 +104,7 @@ class FloatingWindowService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     // ---- 侧边栏里的视图引用。showSidebar() 之后才有效，所以都用可空类型 ----
-    private var statusDotView: View? = null
+    private var statusDotView: StatusDotView? = null
     private var statusTextView: TextView? = null
     private var hintTextView: TextView? = null
     private var limitTextView: TextView? = null
@@ -815,15 +815,15 @@ class FloatingWindowService : Service() {
             LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_status_selected, state.targetX, state.targetY)
         }
 
-        // ---- 状态指示灯颜色 ----
+        // ---- 状态指示灯：颜色平滑过渡 + 长按时外圈脉冲（Phase 6）----
         val dotColorRes = when (phase) {
             LongPressPhase.PRESSING -> R.color.status_pressing
             LongPressPhase.SELECTING_POSITION -> R.color.status_selecting
             LongPressPhase.NO_POSITION -> R.color.status_idle
             LongPressPhase.POSITION_SELECTED -> R.color.status_ready
         }
-        statusDotView?.backgroundTintList =
-            ColorStateList.valueOf(ContextCompat.getColor(this, dotColorRes))
+        statusDotView?.setDotColor(ContextCompat.getColor(this, dotColorRes))
+        statusDotView?.setPressing(phase == LongPressPhase.PRESSING)
 
         // ---- 提示文字 ----
         // 无障碍服务被关掉时，优先提示这件事：此时其他提示都没意义（启动不了）。
