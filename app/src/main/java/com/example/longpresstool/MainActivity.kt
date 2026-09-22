@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import com.example.longpresstool.model.LongPressStateHolder
+import com.example.longpresstool.service.FloatingWindowService
 import com.example.longpresstool.service.LongPressAccessibilityService
 import com.example.longpresstool.ui.MainScreen
 import com.example.longpresstool.ui.MainViewModel
@@ -78,6 +79,11 @@ class MainActivity : ComponentActivity() {
             LongPressAccessibilityService.runSelfTest()
             return
         }
+        if (intent?.getBooleanExtra(EXTRA_DEBUG_FAKE_KILL, false) == true) {
+            // 自测：模拟"进程曾被系统回收"，验证侧边栏仍能重新打开。
+            FloatingWindowService.simulateProcessWasKilled()
+            return
+        }
         val x = intent?.getIntExtra(EXTRA_DEBUG_X, -1) ?: -1
         val y = intent?.getIntExtra(EXTRA_DEBUG_Y, -1) ?: -1
         android.util.Log.d("LongPressDebug", "handleDebugHoldIntent x=$x y=$y")
@@ -130,5 +136,6 @@ class MainActivity : ComponentActivity() {
         private const val EXTRA_DEBUG_X = "debug_x"
         private const val EXTRA_DEBUG_Y = "debug_y"
         private const val EXTRA_DEBUG_SELFTEST = "debug_selftest"
+        private const val EXTRA_DEBUG_FAKE_KILL = "debug_fake_kill"
     }
 }

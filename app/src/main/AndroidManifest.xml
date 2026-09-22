@@ -29,6 +29,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:name=".LongPressToolApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -59,6 +60,8 @@
             并且必须给一个 <property> 说明用途，否则部分应用商店/系统校验会不通过。
           - stopWithTask="true"：用户从最近任务里划掉应用时，顺便关掉侧边栏，
             避免"应用都没了，悬浮窗还挂在屏幕上"的困惑（见需求第十三节：异常情况）。
+            注意：不同 ROM 对这个属性的实现不完全一致，所以代码里另有
+            FloatingWindowService.onTaskRemoved() 做同一件事作为兜底。
           - configChanges：屏幕旋转/尺寸变化时不重建 Service，
             侧边栏不会闪一下；具体处理见 FloatingWindowService.onConfigurationChanged()。
         -->

@@ -785,6 +785,7 @@ class FloatingWindowService : Service() {
 
         serviceScope.launch {
             while (true) {
+                // ---- 无障碍服务是否还被开启 ----
                 val enabled = AccessibilityPermission.isEnabled(this@FloatingWindowService)
                 if (enabled != lastAccessibilityEnabled) {
                     lastAccessibilityEnabled = enabled
@@ -794,6 +795,24 @@ class FloatingWindowService : Service() {
                         connected = LongPressAccessibilityService.isConnected()
                     )
                 }
+
+                // ---- 悬浮窗权限是否被撤销（需求第十三节：权限变化）----
+                // 用户可能在系统设置里随时关掉这个开关。系统会直接把我们的窗口移除，
+                // 但我们这边的状态、通知、前台 Service 都还在——用户就会看到
+                // "首页显示已启动，但屏幕上什么都没有"。
+                // 所以这里主动检测，一旦撤销就干净地退出。
+                if (!OverlayPermission.isGranted(this@FloatingWindowService)) {
+                    Log.w(TAG, "检测到悬浮窗权限被撤销，主动关闭悬浮窗")
+                    LongPressStateHolder.setOverlayPermissionGranted(false)
+                    Toast.makeText(
+                        this@FloatingWindowService,
+                        R.string.error_overlay_permission_revoked,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    closeEverything()
+                    return@launch
+                }
+
                 delay(ACCESSIBILITY_POLL_INTERVAL_MS)
             }
         }
@@ -885,6 +904,11 @@ class FloatingWindowService : Service() {
     }
 
     override fun onDestroy() {
+        // 关闭前一定要先结束长按：否则手指会一直按在屏幕上——
+        // 派发出去的手势由系统执行，不会因为我们这个进程结束就自动抬起
+        // （需求第十三节：长按过程中 App 被关闭）。
+        LongPressAccessibilityService.stopHold()
+
         serviceScope.cancel()
         hideIndicator()
         removeSidebar()
@@ -895,6 +919,21 @@ class FloatingWindowService : Service() {
 
         isRunning = false
         super.onDestroy()
+    }
+
+    /**
+     * 用户从最近任务列表里划掉了本应用（需求第十三节：App 被关闭 / 用户关闭悬浮窗）。
+     *
+     * 为什么还要在这里处理一次：AndroidManifest 里已经声明了 `stopWithTask="true"`，
+     * 系统会自动停掉这个 Service。但不同 ROM 对这个属性的实现并不完全一致，
+     * 有些定制系统并不会因为划掉任务就停 Service——那样用户会看到
+     * "应用都关了，悬浮窗还挂在屏幕上"。
+     * 所以这里显式关闭一次，作为兜底（重复调用是安全的，见 closeEverything 的幂等处理）。
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.d(TAG, "onTaskRemoved：应用被划掉，关闭悬浮窗")
+        closeEverything()
+        super.onTaskRemoved(rootIntent)
     }
 
     /**
@@ -1012,6 +1051,18 @@ class FloatingWindowService : Service() {
         private const val CHANNEL_ID = "long_press_tool_overlay"
         private const val NOTIFICATION_ID = 1001
 
+        /**
+         * 进程标识。
+         *
+         * 类被加载时记下当前值，[processMarker] 则记录"最近一次真正启动 Service 时"的值。
+         * 两者不同，说明本进程不是当初启动 Service 的那个进程——
+         * 也就是进程曾被系统回收过，[isRunning] 这个静态标记已经不可信。
+         */
+        private val processId: Long = System.currentTimeMillis()
+
+        @Volatile
+        private var processMarker: Long = 0L
+
         /** 圆形指示器的直径，必须与 overlay_position_indicator.xml 里的 60dp 一致。 */
         private const val INDICATOR_SIZE_DP = 60
 
@@ -1026,8 +1077,14 @@ class FloatingWindowService : Service() {
         const val EXTRA_DEBUG_Y = "debug_y"
 
         /**
-         * Service 是否正在运行。
+         * 本进程中 Service 是否处于"已启动"状态。
+         *
          * 用 @Volatile 是因为可能被不同线程读写；存静态布尔值而不是 Service 实例，避免内存泄漏。
+         *
+         * 注意它的局限（Phase 7 踩到过）：这是**进程内**的变量，
+         * 进程被系统回收后重新拉起时会变回 false，而系统里可能仍有该 Service 的记录。
+         * 只信它会导致"侧边栏再也打不开"，所以真正启动前还要用
+         * [isServiceActuallyRunning] 向系统核实一次。
          */
         @Volatile
         private var isRunning: Boolean = false
@@ -1035,24 +1092,76 @@ class FloatingWindowService : Service() {
         fun isRunning(): Boolean = isRunning
 
         /**
+         * 当前进程是否就是"真正在运行的那个进程"。
+         *
+         * 做法：把进程启动时记下的静态值 [processMarker] 和当前值比较。
+         * 两者不同 = 本进程是后来才被拉起的，那么之前那个进程持有的
+         * Service/悬浮窗都已经随进程消亡，[isRunning] 的值不可信。
+         */
+        private fun isSameProcessAsBefore(): Boolean = processMarker == processId
+
+        /**
          * 启动悬浮界面。Activity 只需调用这个方法，不用关心 Intent 细节。
+         *
          * 已经运行时直接返回，防止重复添加窗口（重复添加会抛 BadTokenException）。
+         * 但"已经运行"的判断必须排除"进程被杀过"的情况，否则会出现
+         * 「明明侧边栏已经不存在了，点启动却毫无反应」这种卡死状态。
          */
         fun start(context: Context) {
-            if (isRunning) return
+            if (isRunning && isSameProcessAsBefore()) {
+                Log.d(TAG, "start(): 侧边栏已在本进程运行，忽略重复启动")
+                return
+            }
+            if (isRunning && !isSameProcessAsBefore()) {
+                // 进程被回收过：清掉不可信的旧状态，允许重新启动。
+                Log.w(TAG, "start(): 检测到进程曾被杀，重置过期的运行状态")
+                isRunning = false
+            }
+
+            processMarker = processId
             val intent = Intent(context, FloatingWindowService::class.java)
-            // minSdk = 24；startForegroundService 从 API 26 才有，
-            // 24/25 上后台 Service 限制较宽松，用 startService 即可。
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+
+            // startForegroundService / startService 在以下情况会抛异常，
+            // 例如 Android 12+ 的"后台启动前台服务"限制、或用户限制后台运行。
+            // 这里必须兜住，否则用户点一下按钮就闪退（需求第十三节：异常时不要崩溃）。
+            try {
+                // minSdk = 24；startForegroundService 从 API 26 才有，
+                // 24/25 上后台 Service 限制较宽松，用 startService 即可。
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "启动悬浮窗 Service 失败", e)
+                Toast.makeText(
+                    context,
+                    R.string.error_cannot_start_overlay_service,
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
 
         /** 请求关闭悬浮界面。 */
         fun stop(context: Context) {
-            context.stopService(Intent(context, FloatingWindowService::class.java))
+            try {
+                context.stopService(Intent(context, FloatingWindowService::class.java))
+            } catch (e: Exception) {
+                Log.e(TAG, "停止悬浮窗 Service 失败", e)
+            }
+        }
+
+        /**
+         * 【仅 debug】模拟"进程曾被系统回收"的情形，用来验证 [start] 的过期状态检测。
+         *
+         * 真机/模拟器上都很难可靠地复现"进程被回收但静态标记还留在旧值"这一刻
+         * （`am kill` 杀不掉持有前台 Service 的进程），所以直接把标记改成不一致的值。
+         */
+        fun simulateProcessWasKilled() {
+            if (!BuildConfig.DEBUG) return
+            processMarker = processId - 1
+            isRunning = true
+            Log.d(TAG, "debug: 已模拟'进程曾被回收'（isRunning=true 但进程标记不一致）")
         }
     }
 }

@@ -58,6 +58,10 @@
     <string name="error_already_pressing">已经在长按中了</string>
     <string name="error_sidebar_covers_target">侧边栏挡住了长按位置，长按事件会被侧边栏接收，请把它拖开</string>
 
+    <!-- Phase 7：异常处理相关提示 -->
+    <string name="error_cannot_start_overlay_service">无法启动悬浮窗，请检查本应用的后台运行权限</string>
+    <string name="error_overlay_permission_revoked">悬浮窗权限已被关闭，长按器已停止</string>
+
     <!-- 开始长按时的轻提示 -->
     <string name="overlay_status_pressing_short">已开始长按</string>
 
