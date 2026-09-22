@@ -94,10 +94,9 @@ class FloatingWindowService : Service() {
     private var sidebarView: View? = null
     private var sidebarParams: WindowManager.LayoutParams? = null
 
-    /** 圆形位置指示器的根视图与窗口参数。 */
+    /** 圆形准星的根视图与窗口参数。 */
     private var indicatorRootView: View? = null
     private var indicatorView: TouchIndicatorView? = null
-    private var indicatorLabelView: TextView? = null
     private var indicatorParams: WindowManager.LayoutParams? = null
 
     /** Service 自己的协程作用域，用来订阅状态流。onDestroy 必须取消。 */
@@ -108,7 +107,6 @@ class FloatingWindowService : Service() {
     private var statusTextView: TextView? = null
     private var hintTextView: TextView? = null
     private var limitTextView: TextView? = null
-    private var selectPositionButton: Button? = null
     private var startButton: Button? = null
     private var stopButton: Button? = null
     private var closeButton: Button? = null
@@ -189,6 +187,13 @@ class FloatingWindowService : Service() {
             stopSelf()
             return
         }
+
+        // 侧边栏已经显示出来了，从这里开始"长按器处于运行状态"。
+        //
+        // 这一步很关键：准星的显示条件就是 state.isServiceRunning
+        // （需求变更后准星与侧边栏同生同死），
+        // 不设它就会出现"侧边栏在、准星不在、位置永远是 (0,0)"。
+        LongPressStateHolder.setServiceRunning(true)
 
         observeState()
     }
@@ -357,7 +362,6 @@ class FloatingWindowService : Service() {
         statusTextView = root.findViewById(R.id.text_status)
         hintTextView = root.findViewById(R.id.text_hint)
         limitTextView = root.findViewById(R.id.text_limit)
-        selectPositionButton = root.findViewById(R.id.button_select_position)
         startButton = root.findViewById(R.id.button_start)
         stopButton = root.findViewById(R.id.button_stop)
         closeButton = root.findViewById(R.id.button_close)
@@ -366,28 +370,14 @@ class FloatingWindowService : Service() {
     private fun setupSidebarClickListeners() {
         closeButton?.setOnClickListener { closeEverything() }
 
-        selectPositionButton?.setOnClickListener {
-            val state = LongPressStateHolder.state.value
-            if (state.isSelectingPosition) {
-                // 再次点击 = 完成选择：隐藏指示器，但保留刚才记录的坐标。
-                LongPressStateHolder.setSelectingPosition(false)
-            } else {
-                LongPressStateHolder.setSelectingPosition(true)
-            }
-        }
-
         startButton?.setOnClickListener {
+            // 位置不再需要"先选择再确认"：准星在侧边栏出现时就在屏幕上了，
+            // 它的圆心坐标始终记录在 LongPressStateHolder 里，直接拿来用即可。
             val state = LongPressStateHolder.state.value
-            Log.d(TAG, "点击「启动」hasSelectedPosition=${state.hasSelectedPosition} " +
-                "target=(${state.targetX},${state.targetY}) isPressing=${state.isPressing}")
+            Log.d(TAG, "点击「启动」target=(${state.targetX},${state.targetY}) isPressing=${state.isPressing}")
 
-            // 启动前把前提条件查一遍，缺什么就明确告诉用户缺什么（需求第七节）。
-            if (!state.hasSelectedPosition) {
-                Toast.makeText(this, R.string.error_no_position_selected, Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
+            // 唯一的阻碍只剩无障碍服务：它可能在侧边栏打开期间被用户在系统设置里关掉。
             if (!AccessibilityPermission.isEnabled(this)) {
-                // 用户在系统设置里把无障碍关掉了：给出提示并引导回去开启。
                 Toast.makeText(this, R.string.error_accessibility_disabled, Toast.LENGTH_LONG).show()
                 AccessibilityPermission.openSettings(this)
                 return@setOnClickListener
@@ -582,7 +572,7 @@ class FloatingWindowService : Service() {
         params.y = params.y.coerceIn(bounds.top, (bounds.bottom - height).coerceAtLeast(bounds.top))
     }
 
-    // ==================== 圆形位置指示器 ====================
+    // ==================== 圆形准星 ====================
 
     private fun showIndicator() {
         if (indicatorRootView != null) return
@@ -592,8 +582,8 @@ class FloatingWindowService : Service() {
             .inflate(R.layout.overlay_position_indicator, FrameLayout(this), false)
 
         val params = WindowManager.LayoutParams(
-            dpToPx(INDICATOR_SIZE_DP),          // 固定宽度：与布局保持一致
-            dpToPx(INDICATOR_WINDOW_HEIGHT_DP), // 固定高度
+            dpToPx(INDICATOR_SIZE_DP),
+            dpToPx(INDICATOR_SIZE_DP),          // 正方形窗口，与准星同尺寸
             resolveWindowType(),
             baseWindowFlags,                    // 注意：不加 FLAG_LAYOUT_NO_LIMITS，理由见类注释
             PixelFormat.TRANSLUCENT
@@ -620,13 +610,12 @@ class FloatingWindowService : Service() {
         indicatorRootView = root
         indicatorParams = params
         indicatorView = root.findViewById(R.id.touch_indicator)
-        indicatorLabelView = root.findViewById(R.id.text_indicator_coords)
 
         setupIndicatorDrag(root)
         clampIndicatorIntoScreen(params)
         safeUpdateLayout(root, params)
 
-        // 记录初始位置，并让 App 的其他部分知道"位置已经变了"。
+        // 记录初始位置，让侧边栏状态区显示当前坐标。
         reportIndicatorCenter()
     }
 
@@ -686,8 +675,10 @@ class FloatingWindowService : Service() {
     }
 
     /**
-     * 把"圆心在屏幕上的绝对坐标"写进全局状态，并刷新指示器下方的坐标文字。
-     * 这个坐标就是 Phase 5 要交给 dispatchGesture() 的那个点。
+     * 把"准星圆心在屏幕上的绝对坐标"写进全局状态。
+     *
+     * 这个坐标就是交给 dispatchGesture() 的那个点，也是侧边栏状态区显示的数字。
+     * 准星下方不再显示坐标文字（保持画面干净），所以这里只更新状态。
      */
     private fun reportIndicatorCenter() {
         val params = indicatorParams ?: return
@@ -696,16 +687,14 @@ class FloatingWindowService : Service() {
         val centerY = params.y + size / 2
 
         LongPressStateHolder.setTargetPosition(centerX, centerY)
-        indicatorLabelView?.text = getString(R.string.indicator_coords, centerX, centerY)
     }
 
     private fun clampIndicatorIntoScreen(params: WindowManager.LayoutParams) {
         val bounds = usableBounds()
         val size = dpToPx(INDICATOR_SIZE_DP)
-        val windowHeight = dpToPx(INDICATOR_WINDOW_HEIGHT_DP)
 
         params.x = params.x.coerceIn(bounds.left, (bounds.right - size).coerceAtLeast(bounds.left))
-        params.y = params.y.coerceIn(bounds.top, (bounds.bottom - windowHeight).coerceAtLeast(bounds.top))
+        params.y = params.y.coerceIn(bounds.top, (bounds.bottom - size).coerceAtLeast(bounds.top))
     }
 
     private fun hideIndicator() {
@@ -727,7 +716,6 @@ class FloatingWindowService : Service() {
 
         indicatorRootView = null
         indicatorView = null
-        indicatorLabelView = null
         indicatorParams = null
     }
 
@@ -753,9 +741,12 @@ class FloatingWindowService : Service() {
             LongPressStateHolder.state.collectLatest { state ->
                 renderSidebar(state)
 
-                // 指示器只在"选择位置"和"长按中"出现：
-                // 选择时要能拖，长按时要能看到视觉状态变化（需求第八节）。
-                val shouldShow = state.isSelectingPosition || state.isPressing
+                // ===== 准星与侧边栏同生同死 =====
+                // 需求变更后不再有"选择位置/完成选择"两步：
+                // 只要侧边栏在（Service 运行中），圆形准星就一直显示在屏幕上，
+                // 用户随时可以拖动它对准目标，然后直接点「启动」。
+                // 关闭侧边栏时 Service 结束，onDestroy 会一并移除准星。
+                val shouldShow = state.isServiceRunning
 
                 // 先决定"能不能摸"，再创建窗口，避免新建出来的窗口带着错误的 flag。
                 // 长按期间指示器必须穿透（理由见 startLongPress 的说明）。
@@ -819,27 +810,18 @@ class FloatingWindowService : Service() {
     }
 
     private fun renderSidebar(state: com.example.longpresstool.model.LongPressUiState) {
-        val phase = when {
-            state.isPressing -> LongPressPhase.PRESSING
-            state.isSelectingPosition -> LongPressPhase.SELECTING_POSITION
-            state.hasSelectedPosition -> LongPressPhase.POSITION_SELECTED
-            else -> LongPressPhase.NO_POSITION
-        }
+        val phase = if (state.isPressing) LongPressPhase.PRESSING else LongPressPhase.READY
 
-        // ---- 状态文字 ----
+        // ---- 状态文字：始终显示准星当前坐标，"长按中"是叠加在上面的额外信息 ----
         statusTextView?.text = when (phase) {
             LongPressPhase.PRESSING -> getString(R.string.overlay_status_pressing, state.targetX, state.targetY)
-            LongPressPhase.NO_POSITION -> getString(R.string.overlay_status_not_selected)
-            LongPressPhase.SELECTING_POSITION -> getString(R.string.overlay_status_selecting)
-            LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_status_selected, state.targetX, state.targetY)
+            LongPressPhase.READY -> getString(R.string.overlay_status_ready, state.targetX, state.targetY)
         }
 
         // ---- 状态指示灯：颜色平滑过渡 + 长按时外圈脉冲（Phase 6）----
         val dotColorRes = when (phase) {
             LongPressPhase.PRESSING -> R.color.status_pressing
-            LongPressPhase.SELECTING_POSITION -> R.color.status_selecting
-            LongPressPhase.NO_POSITION -> R.color.status_idle
-            LongPressPhase.POSITION_SELECTED -> R.color.status_ready
+            LongPressPhase.READY -> R.color.status_ready
         }
         statusDotView?.setDotColor(ContextCompat.getColor(this, dotColorRes))
         statusDotView?.setPressing(phase == LongPressPhase.PRESSING)
@@ -849,23 +831,14 @@ class FloatingWindowService : Service() {
         hintTextView?.text = when {
             !state.isAccessibilityEnabled -> getString(R.string.overlay_hint_accessibility_off)
             phase == LongPressPhase.PRESSING -> getString(R.string.overlay_hint_pressing)
-            phase == LongPressPhase.SELECTING_POSITION -> getString(R.string.overlay_hint_selecting)
-            phase == LongPressPhase.POSITION_SELECTED -> getString(R.string.overlay_hint_ready)
-            else -> getString(R.string.overlay_hint_choose_position)
+            else -> getString(R.string.overlay_hint_ready)
         }
 
         // 只在长按时显示"60 秒分段"的限制说明，平时不打扰用户。
         limitTextView?.visibility = if (phase == LongPressPhase.PRESSING) View.VISIBLE else View.GONE
 
         // ---- 按钮 ----
-        selectPositionButton?.text =
-            if (phase == LongPressPhase.SELECTING_POSITION) getString(R.string.action_finish_selecting)
-            else getString(R.string.action_select_position)
-
-        // 长按过程中不允许改位置，避免指示器和实际按下的点不一致。
-        selectPositionButton?.isEnabled = phase != LongPressPhase.PRESSING
-        // 启动需要三个条件同时成立，判断逻辑集中在 LongPressUiState.canStartLongPress，
-        // 避免这里和首页各写一套导致不一致。
+        // 「启动」的可用性判断集中在 LongPressUiState.canStartLongPress，避免这里和首页各写一套。
         startButton?.isEnabled = state.canStartLongPress
         stopButton?.isEnabled = phase == LongPressPhase.PRESSING
     }
@@ -897,7 +870,6 @@ class FloatingWindowService : Service() {
         statusTextView = null
         hintTextView = null
         limitTextView = null
-        selectPositionButton = null
         startButton = null
         stopButton = null
         closeButton = null
@@ -1063,11 +1035,11 @@ class FloatingWindowService : Service() {
         @Volatile
         private var processMarker: Long = 0L
 
-        /** 圆形指示器的直径，必须与 overlay_position_indicator.xml 里的 60dp 一致。 */
+        /**
+         * 准星的直径，必须与 overlay_position_indicator.xml 里的 60dp 一致。
+         * 窗口也是同样尺寸的正方形，所以"窗口左上角 + 30dp"就是准星圆心的屏幕坐标。
+         */
         private const val INDICATOR_SIZE_DP = 60
-
-        /** 指示器窗口总高度 = 圆形 60dp + 下方坐标文字 36dp。 */
-        private const val INDICATOR_WINDOW_HEIGHT_DP = 96
 
         /** 检查无障碍服务是否仍开启的间隔（毫秒）。 */
         private const val ACCESSIBILITY_POLL_INTERVAL_MS = 1_000L

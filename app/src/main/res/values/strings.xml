@@ -5,6 +5,7 @@
 
     <!-- ===== 首页 ===== -->
     <string name="action_toggle_long_press_mode">启动长按器</string>
+    <string name="action_exit_app">退出</string>
     <string name="status_not_started">状态：未启动</string>
     <string name="status_running">状态：长按器模式已开启</string>
     <string name="status_pressing">状态：正在长按</string>
@@ -33,25 +34,23 @@
     <string name="overlay_sidebar_title">长按器</string>
     <string name="overlay_close">关闭</string>
 
-    <string name="action_select_position">选择位置</string>
-    <string name="action_finish_selecting">完成选择</string>
     <string name="action_start_long_press">启动</string>
     <string name="action_stop_long_press">停止</string>
 
-    <string name="overlay_status_not_selected">未选择位置</string>
-    <string name="overlay_status_selecting">正在选择位置</string>
-    <string name="overlay_status_selected">已选择位置（%1$d, %2$d）</string>
+    <!--
+      状态文字。
+      准星是常驻的，所以"未选择位置""正在选择位置"这类状态已经不存在了：
+      只要侧边栏在，准星就在，状态永远显示它当前所在的坐标。
+    -->
+    <string name="overlay_status_ready">准星位置（%1$d, %2$d）</string>
     <string name="overlay_status_pressing">长按中（%1$d, %2$d）</string>
 
-    <string name="overlay_hint_choose_position">请点击「选择位置」，把圆形指示器拖到需要长按的地方。</string>
-    <string name="overlay_hint_selecting">拖动圆形指示器到目标位置，对准后点「完成选择」。</string>
-    <string name="overlay_hint_ready">位置已确定。点击「启动」执行长按。</string>
+    <string name="overlay_hint_ready">拖动圆形准星对准目标位置，然后点「启动」。</string>
     <string name="overlay_hint_pressing">正在按住该位置。点击「停止」即可结束长按。</string>
     <string name="overlay_hint_max_duration">注意：Android 系统限制单次手势最长 60 秒，本应用会自动分段续接以持续按住。</string>
     <string name="overlay_hint_accessibility_off">无障碍服务已被关闭，无法执行长按。请在系统设置的「无障碍」中重新开启「长按器」。</string>
 
     <!-- 操作被拒绝时的提示（需求第七节：缺什么就明确提示什么） -->
-    <string name="error_no_position_selected">请先点击「选择位置」选定要长按的位置</string>
     <string name="error_accessibility_disabled">无障碍服务未开启，无法执行长按，正在打开系统设置</string>
     <string name="error_accessibility_not_connected">无障碍服务尚未就绪，请稍后重试</string>
     <string name="error_unsupported_android_version">当前系统版本过低（低于 Android 8.0），无法持续长按。系统限制单次手势最长 60 秒。</string>
@@ -64,9 +63,6 @@
 
     <!-- 开始长按时的轻提示 -->
     <string name="overlay_status_pressing_short">已开始长按</string>
-
-    <!-- 圆形指示器下方显示的实时坐标 -->
-    <string name="indicator_coords">%1$d, %2$d</string>
 
     <!-- ===== 通知（前台 Service 必需） ===== -->
     <string name="notification_channel_name">长按器运行状态</string>

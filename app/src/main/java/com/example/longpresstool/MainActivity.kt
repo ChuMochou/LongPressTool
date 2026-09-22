@@ -52,7 +52,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             LongPressToolTheme {
-                MainScreen(viewModel = viewModel)
+                MainScreen(
+                    viewModel = viewModel,
+                    // 「退出」按钮：结束界面，并把本应用从最近任务列表里移除，
+                    // 这样用户感觉是"真的退出了"，而不是留在后台。
+                    onExit = { finishAndRemoveTask() }
+                )
             }
         }
 

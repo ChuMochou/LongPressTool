@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      悬浮侧边栏状态指示灯的颜色。三种状态用三种颜色，让用户一眼分辨：
-      灰 = 还没选位置，绿 = 位置已就绪，红 = 正在长按。
+      悬浮侧边栏状态指示灯的颜色。
+      灰 = StatusDotView 的初始颜色（还没收到状态时）；绿 = 准星就绪；红 = 正在长按。
     -->
     <color name="status_idle">#FF9E9E9E</color>
-    <color name="status_selecting">#FFF9A825</color>
     <color name="status_ready">#FF2E7D32</color>
     <color name="status_pressing">#FFD32F2F</color>
 
@@ -24,10 +23,6 @@
       它与旋转虚线环一起，保证"正在长按"这个状态连静止截图都能看出来。
     -->
     <color name="indicator_pulse">#66D32F2F</color>
-
-    <!-- 指示器下方坐标文字的底色与文字色 -->
-    <color name="indicator_label_background">#CC000000</color>
-    <color name="indicator_label_text">#FFFFFFFF</color>
 
     <!--
       悬浮侧边栏自身的配色。

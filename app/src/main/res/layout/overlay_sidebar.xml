@@ -91,27 +91,22 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:text="@string/overlay_status_not_selected"
+                android:text="@string/overlay_status_ready"
                 android:textColor="@color/overlay_text_primary"
                 android:textSize="13sp" />
         </LinearLayout>
 
-        <!-- ===== 操作按钮 ===== -->
-        <Button
-            android:id="@+id/button_select_position"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/overlay_button_primary"
-            android:text="@string/action_select_position"
-            android:textColor="@color/overlay_button_primary_text"
-            android:textSize="14sp" />
-
+        <!--
+          ===== 操作按钮 =====
+          只有「启动」和「停止」两个。
+          位置不再需要先"选择"再"确认"：圆形准星在侧边栏出现时就一直在，
+          用户直接拖动它对准目标位置即可（见 FloatingWindowService 的说明）。
+        -->
         <Button
             android:id="@+id/button_start"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="10dp"
             android:background="@drawable/overlay_button_primary"
             android:text="@string/action_start_long_press"
             android:textColor="@color/overlay_button_primary_text"
@@ -133,7 +128,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/overlay_hint_choose_position"
+            android:text="@string/overlay_hint_ready"
             android:textColor="@color/overlay_text_secondary"
             android:textSize="11sp" />
 

@@ -41,12 +41,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = LongPressStateHolder.state.value
         )
 
-    /** 当前阶段（未选位置 / 选择中 / 已就绪 / 长按中），供界面显示不同文案。 */
+    /** 当前阶段（准星就绪 / 长按中）。 */
     val phase: StateFlow<LongPressPhase> = LongPressStateHolder.phase
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = LongPressPhase.NO_POSITION
+            initialValue = LongPressPhase.READY
         )
 
     init {
@@ -119,6 +119,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 用户点了"关闭长按器"。 */
     fun stopLongPressMode() {
+        FloatingWindowService.stop(getApplication())
+    }
+
+    /**
+     * 用户点了首页的「退出」。
+     *
+     * 先关闭悬浮侧边栏，避免"应用退了、悬浮窗还挂在屏幕上"。
+     * 真正结束 Activity 由界面层调用 finishAndRemoveTask() 完成
+     * （ViewModel 不该持有 Activity 引用，那会造成内存泄漏）。
+     */
+    fun prepareToExit() {
         FloatingWindowService.stop(getApplication())
     }
 

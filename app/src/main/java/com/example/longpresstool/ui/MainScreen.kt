@@ -52,7 +52,8 @@ private val ColorPressing = Color(0xFFD32F2F)  // 红：长按中
 @Composable
 fun MainScreen(
     modifier: Modifier = Modifier,
-    viewModel: MainViewModel = viewModel()
+    viewModel: MainViewModel = viewModel(),
+    onExit: () -> Unit = {}
 ) {
     // collectAsStateWithLifecycle：界面不可见时自动停止收集，比 collectAsState 更省电、更安全。
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -100,6 +101,21 @@ fun MainScreen(
                 ) {
                     Text(text = stringResource(R.string.overlay_close))
                 }
+            }
+
+            // ---- 退出应用 ----
+            // 放在最下面，样式比主按钮弱一级：避免误触。
+            OutlinedButton(
+                onClick = {
+                    // 先关悬浮侧边栏，再结束界面，避免"应用退了、悬浮窗还在"。
+                    viewModel.prepareToExit()
+                    onExit()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+            ) {
+                Text(text = stringResource(R.string.action_exit_app))
             }
 
             // ---- 权限清单：缺哪个就显示哪个 ----

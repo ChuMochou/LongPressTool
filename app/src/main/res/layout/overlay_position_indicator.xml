@@ -1,36 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  圆形位置指示器所在的悬浮窗布局。
+  圆形准星所在的悬浮窗布局。
 
-  尺寸刻意写成固定值：
-  - 外层 FrameLayout 固定 60dp x 96dp
-  - 圆形指示器固定 60dp x 60dp，位于左上角
+  尺寸刻意写成固定值：窗口 60dp x 60dp，准星正好铺满。
 
-  这样"窗口左上角坐标 + 30dp"就是圆心在屏幕上的绝对坐标，
+  这样"窗口左上角坐标 + 30dp"就是准星圆心在屏幕上的绝对坐标，
   不需要任何跨版本的坐标换算（见 FloatingWindowService 里的说明）。
+  窗口尺寸与准星尺寸一致时，拖动窗口就等于拖动准星，圆心永远在窗口正中。
 
-  下面那块坐标文字在圆形下方，是为了不遮挡用户的对准视野；
-  指示器的 touch 事件由整个窗口接收，所以文字只有 36dp 高，不会挡太多。
+  这里只有准星本身：坐标不再显示在准星下方（避免遮挡和视觉干扰），
+  当前坐标显示在侧边栏的状态区里。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="60dp"
-    android:layout_height="96dp">
+    android:layout_height="60dp">
 
     <com.example.longpresstool.ui.widget.TouchIndicatorView
         android:id="@+id/touch_indicator"
         android:layout_width="60dp"
-        android:layout_height="60dp"
-        android:layout_gravity="top|start" />
-
-    <TextView
-        android:id="@+id/text_indicator_coords"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|center_horizontal"
-        android:background="@drawable/indicator_label_background"
-        android:paddingHorizontal="6dp"
-        android:paddingVertical="2dp"
-        android:textColor="@color/indicator_label_text"
-        android:textSize="11sp" />
+        android:layout_height="60dp" />
 
 </FrameLayout>

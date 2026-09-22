@@ -12,8 +12,8 @@ import kotlinx.coroutines.flow.update
  * 这是唯一的数据源：Activity 的首页、悬浮侧边栏都读它，谁都不自己存一份。
  *
  * 为什么用 StateFlow 而不是让界面各自 remember 一个变量：
- * Phase 2 开始，状态要在 Activity 和 Service 之间共享，而且 Service 可能比 Activity
- * 活得更久。界面自己存变量必然会和真实状态不一致（比如侧边栏已经关了，首页还显示"已开启"）。
+ * 状态要在 Activity 和 Service 之间共享，而且 Service 可能比 Activity 活得更久。
+ * 界面自己存变量必然会和真实状态不一致（比如侧边栏已经关了，首页还显示"已开启"）。
  *
  * 注意这里只放"数据"，不放业务逻辑，方便初学者一眼看清有哪些状态。
  */
@@ -30,16 +30,13 @@ data class LongPressUiState(
     /** 悬浮侧边栏 Service 是否正在运行。 */
     val isServiceRunning: Boolean = false,
 
-    /** 是否正在"选择位置"模式（屏幕上显示可拖动的圆形指示器）。 */
-    val isSelectingPosition: Boolean = false,
+    /** 准星位置是否已经就绪（准星显示过一次就为 true）。 */
+    val hasPosition: Boolean = false,
 
-    /** 是否已经选定过长按位置。 */
-    val hasSelectedPosition: Boolean = false,
-
-    /** 所选位置的 X 坐标（屏幕绝对像素，与 dispatchGesture 同一坐标系）。 */
+    /** 准星圆心当前的 X 坐标（屏幕绝对像素，与 dispatchGesture 同一坐标系）。 */
     val targetX: Int = 0,
 
-    /** 所选位置的 Y 坐标（屏幕绝对像素）。 */
+    /** 准星圆心当前的 Y 坐标（屏幕绝对像素）。 */
     val targetY: Int = 0,
 
     /** 是否正在执行长按。 */
@@ -48,11 +45,26 @@ data class LongPressUiState(
     /**
      * 派生属性：什么时候才允许点「启动」。
      *
-     * 三个条件缺一不可：选过位置、没在长按、无障碍服务可用。
+     * 现在只有两个条件：准星位置已就绪、且没在长按中。
+     * （早期版本还要求"用户先点过选择位置"，改成准星常驻后这一步就不需要了。）
      * 集中放在这里而不是散落在界面里，避免多处判断不一致。
      */
     val canStartLongPress: Boolean
-        get() = hasSelectedPosition && !isPressing && isAccessibilityEnabled
+        get() = hasPosition && !isPressing && isAccessibilityEnabled
+}
+
+/**
+ * 长按器的运行阶段。
+ *
+ * 只有两个：准星就绪可以启动、以及正在长按。
+ * （早期版本的"未选择位置""正在选择位置"随着准星改成常驻已经不存在了。）
+ */
+enum class LongPressPhase {
+    /** 准星就绪，随时可以点「启动」。 */
+    READY,
+
+    /** 正在长按。 */
+    PRESSING
 }
 
 /**
@@ -71,16 +83,9 @@ object LongPressStateHolder {
     /** 对外的只读状态流，界面订阅它即可。 */
     val state: StateFlow<LongPressUiState> = _state.asStateFlow()
 
-    /**
-     * 界面只关心"整体处于哪一档"，用一个枚举表达，避免界面里写一堆 if-else。
-     */
+    /** 界面只关心"整体处于哪一档"，用枚举表达，避免界面里写一堆 if-else。 */
     val phase = state.map { s ->
-        when {
-            s.isPressing -> LongPressPhase.PRESSING
-            s.isSelectingPosition -> LongPressPhase.SELECTING_POSITION
-            s.hasSelectedPosition -> LongPressPhase.POSITION_SELECTED
-            else -> LongPressPhase.NO_POSITION
-        }
+        if (s.isPressing) LongPressPhase.PRESSING else LongPressPhase.READY
     }
 
     // ---- 以下都是很小的、语义明确的更新方法，避免到处写 copy() ----
@@ -103,39 +108,28 @@ object LongPressStateHolder {
     fun setServiceRunning(running: Boolean) =
         _state.update { it.copy(isServiceRunning = running) }
 
-    fun setSelectingPosition(selecting: Boolean) =
-        _state.update { it.copy(isSelectingPosition = selecting) }
-
+    /**
+     * 记录准星圆心位置。
+     *
+     * 准星每次被拖动、以及刚显示出来时都会调用它，
+     * 所以 [LongPressUiState.hasPosition] 在准星出现后必定为 true。
+     */
     fun setTargetPosition(x: Int, y: Int) =
-        _state.update { it.copy(hasSelectedPosition = true, targetX = x, targetY = y) }
+        _state.update { it.copy(hasPosition = true, targetX = x, targetY = y) }
 
     fun setPressing(pressing: Boolean) =
         _state.update { it.copy(isPressing = pressing) }
 
     /**
-     * 关闭侧边栏时调用：把"运行中"相关的状态全部复位，但**保留已选位置**，
-     * 这样用户下次打开还能接着用上次的位置（需求第九节明确要求保留位置）。
+     * 关闭侧边栏时调用：把"运行中"相关的状态复位。
+     *
+     * 位置（targetX / targetY）会保留：准星下次打开还在原处，
+     * 不需要用户重新对准一次（需求第九节要求停止后保留位置）。
      */
     fun resetRunningState() = _state.update {
         it.copy(
             isServiceRunning = false,
-            isSelectingPosition = false,
             isPressing = false
         )
     }
-}
-
-/** 长按器的四个阶段，供界面显示不同文案和样式。 */
-enum class LongPressPhase {
-    /** 还没有选位置 */
-    NO_POSITION,
-
-    /** 正在选择位置 */
-    SELECTING_POSITION,
-
-    /** 位置已确定，可以启动 */
-    POSITION_SELECTED,
-
-    /** 正在长按 */
-    PRESSING
 }
