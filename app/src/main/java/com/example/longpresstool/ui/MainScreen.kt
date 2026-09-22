@@ -94,10 +94,13 @@ fun MainScreen(
             }
 
             // 已经启动时，给一个从首页关闭的入口（平时应该用侧边栏里的「关闭」）。
+            // 用 OutlinedButton，和下面的「退出」保持同一种带边框的样式。
             if (uiState.isServiceRunning) {
-                TextButton(
+                OutlinedButton(
                     onClick = { viewModel.stopLongPressMode() },
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
                 ) {
                     Text(text = stringResource(R.string.overlay_close))
                 }
